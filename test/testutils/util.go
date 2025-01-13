@@ -18,8 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strconv"
+	"strings"
 
+	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -32,8 +36,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	leaderworkerset "sigs.k8s.io/lws/api/leaderworkerset/v1"
-	"sigs.k8s.io/lws/pkg/utils"
 	acceleratorutils "sigs.k8s.io/lws/pkg/utils/accelerators"
+	revisionutils "sigs.k8s.io/lws/pkg/utils/revision"
 )
 
 func MustCreateLws(ctx context.Context, k8sClient client.Client, lws *leaderworkerset.LeaderWorkerSet) {
@@ -57,6 +61,8 @@ func CreateWorkerPodsForLeaderPod(ctx context.Context, leaderPod corev1.Pod, k8s
 						leaderworkerset.SetNameLabelKey:     lws.Name,
 						"worker.pod":                        "workers",
 						leaderworkerset.WorkerIndexLabelKey: strconv.Itoa(i),
+						leaderworkerset.RevisionKey:         revisionutils.GetRevisionKey(&leaderPod),
+						leaderworkerset.GroupIndexLabelKey:  leaderPod.Labels[leaderworkerset.GroupIndexLabelKey],
 					},
 					Annotations: map[string]string{
 						leaderworkerset.SizeAnnotationKey: strconv.Itoa(int(*lws.Spec.LeaderWorkerTemplate.Size)),
@@ -74,6 +80,17 @@ func CreateWorkerPodsForLeaderPod(ctx context.Context, leaderPod corev1.Pod, k8s
 		}
 		return nil
 	}).Should(gomega.Succeed())
+}
+
+func DeleteWorkerPods(ctx context.Context, k8sClient client.Client, lws *leaderworkerset.LeaderWorkerSet) {
+	var workers corev1.PodList
+	gomega.Eventually(func() bool {
+		gomega.Expect(k8sClient.List(ctx, &workers, client.InNamespace(lws.Namespace), &client.MatchingLabels{"worker.pod": "workers"})).To(gomega.Succeed())
+		return len(workers.Items) == int(*lws.Spec.LeaderWorkerTemplate.Size)
+	}, Timeout, Interval).Should(gomega.Equal(true))
+	for i := range workers.Items {
+		gomega.Expect(k8sClient.Delete(ctx, &workers.Items[i])).To(gomega.Succeed())
+	}
 }
 
 func DeleteLeaderPods(ctx context.Context, k8sClient client.Client, lws *leaderworkerset.LeaderWorkerSet) {
@@ -116,8 +133,34 @@ func DeleteLeaderPod(ctx context.Context, k8sClient client.Client, lws *leaderwo
 }
 
 func CreateLeaderPods(ctx context.Context, leaderSts appsv1.StatefulSet, k8sClient client.Client, lws *leaderworkerset.LeaderWorkerSet, start int, end int) error {
+	cr, err := revisionutils.NewRevision(ctx, k8sClient, lws, "")
+	if err != nil {
+		return err
+	}
+
+	return createLeaderPods(ctx, k8sClient, leaderSts, lws, revisionutils.GetRevisionKey(cr), start, end)
+}
+
+func CreateLeaderPodsFromRevisionNumber(ctx context.Context, leaderSts appsv1.StatefulSet, k8sClient client.Client, lws *leaderworkerset.LeaderWorkerSet, start, end, revisionNumber int) {
+	selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{
+		leaderworkerset.SetNameLabelKey: lws.Name,
+	}})
+	gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
+	revisions, err := revisionutils.ListRevisions(ctx, k8sClient, lws, selector)
+	gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
+	var targetRevision *appsv1.ControllerRevision
+	for i, revision := range revisions {
+		if revision.Revision == int64(revisionNumber) {
+			targetRevision = revisions[i]
+		}
+	}
+	targetLws, err := revisionutils.ApplyRevision(lws, targetRevision)
+	gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
+	gomega.Expect(createLeaderPods(ctx, k8sClient, leaderSts, targetLws, revisionutils.GetRevisionKey(targetRevision), start, end)).To(gomega.Succeed())
+}
+
+func createLeaderPods(ctx context.Context, k8sClient client.Client, leaderSts appsv1.StatefulSet, lws *leaderworkerset.LeaderWorkerSet, revisionKey string, start, end int) error {
 	var podTemplateSpec corev1.PodTemplateSpec
-	// if leader template is nil, use worker template
 	if lws.Spec.LeaderWorkerTemplate.LeaderTemplate != nil {
 		podTemplateSpec = *lws.Spec.LeaderWorkerTemplate.LeaderTemplate.DeepCopy()
 	} else {
@@ -133,7 +176,7 @@ func CreateLeaderPods(ctx context.Context, leaderSts appsv1.StatefulSet, k8sClie
 					leaderworkerset.WorkerIndexLabelKey:     strconv.Itoa(0),
 					leaderworkerset.GroupIndexLabelKey:      strconv.Itoa(i),
 					leaderworkerset.GroupUniqueHashLabelKey: "randomValue",
-					leaderworkerset.TemplateRevisionHashKey: utils.LeaderWorkerTemplateHash(lws),
+					leaderworkerset.RevisionKey:             revisionKey,
 				},
 				Annotations: map[string]string{
 					leaderworkerset.SizeAnnotationKey: strconv.Itoa(int(*lws.Spec.LeaderWorkerTemplate.Size)),
@@ -152,6 +195,7 @@ func CreateLeaderPods(ctx context.Context, leaderSts appsv1.StatefulSet, k8sClie
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -161,11 +205,13 @@ func ExpectValidPods(ctx context.Context, k8sClient client.Client, lws *leaderwo
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: lws.Name, Namespace: lws.Namespace}, lws); err != nil {
 			return err
 		}
-
-		hash := utils.LeaderWorkerTemplateHash(lws)
+		cr, err := revisionutils.NewRevision(ctx, k8sClient, lws, "")
+		if err != nil {
+			return err
+		}
 		labelSelector := client.MatchingLabels(map[string]string{
-			leaderworkerset.SetNameLabelKey:         lws.Name,
-			leaderworkerset.TemplateRevisionHashKey: hash,
+			leaderworkerset.SetNameLabelKey: lws.Name,
+			leaderworkerset.RevisionKey:     revisionutils.GetRevisionKey(cr),
 		})
 
 		if err := k8sClient.List(ctx, podList, labelSelector, client.InNamespace(lws.Namespace)); err != nil {
@@ -173,7 +219,7 @@ func ExpectValidPods(ctx context.Context, k8sClient client.Client, lws *leaderwo
 		}
 
 		if len(podList.Items) != int((*lws.Spec.Replicas)*(*lws.Spec.LeaderWorkerTemplate.Size)) {
-			return errors.New("pod number not right")
+			return fmt.Errorf("expected %d pods, got %d", (int((*lws.Spec.Replicas) * (*lws.Spec.LeaderWorkerTemplate.Size))), len(podList.Items))
 		}
 
 		var leaderTemplateSpec corev1.PodTemplateSpec
@@ -194,6 +240,7 @@ func ExpectValidPods(ctx context.Context, k8sClient client.Client, lws *leaderwo
 				return errors.New("container name not right")
 			}
 		}
+
 		return nil
 	}, Timeout, Interval).Should(gomega.Succeed())
 }
@@ -246,12 +293,11 @@ func SetLeaderPodToReady(ctx context.Context, k8sClient client.Client, podName s
 			return err
 		}
 
-		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: lws.Namespace, Name: lws.Name}, lws); err != nil {
+		var leaderSts appsv1.StatefulSet
+		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: lws.Namespace, Name: lws.Name}, &leaderSts); err != nil {
 			return err
 		}
-		hash := utils.LeaderWorkerTemplateHash(lws)
-
-		leaderPod.Labels[leaderworkerset.TemplateRevisionHashKey] = hash
+		leaderPod.Labels[leaderworkerset.RevisionKey] = revisionutils.GetRevisionKey(&leaderSts)
 		return k8sClient.Update(ctx, &leaderPod)
 	}, Timeout, Interval).Should(gomega.Succeed())
 
@@ -552,4 +598,48 @@ func deleteWorkerStatefulSetIfExists(ctx context.Context, k8sClient client.Clien
 		}
 		return k8sClient.Delete(ctx, &sts)
 	}, Timeout, Interval).Should(gomega.Succeed())
+}
+
+// GetProjectDir will return the directory where the project is
+func GetProjectDir() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return wd, err
+	}
+	wd = strings.Replace(wd, "/test/e2e", "", -1)
+	return wd, nil
+}
+
+// Run executes the provided command within this context
+func Run(cmd *exec.Cmd) (string, error) {
+	dir, _ := GetProjectDir()
+	cmd.Dir = dir
+
+	if err := os.Chdir(cmd.Dir); err != nil {
+		_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "chdir dir: %s\n", err)
+	}
+
+	cmd.Env = append(os.Environ(), "GO111MODULE=on")
+	command := strings.Join(cmd.Args, " ")
+	_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "running: %s\n", command)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("%s failed with error: (%v) %s", command, err, string(output))
+	}
+
+	return string(output), nil
+}
+
+// GetNonEmptyLines converts given command output string into individual objects
+// according to line breakers, and ignores the empty elements in it.
+func GetNonEmptyLines(output string) []string {
+	var res []string
+	elements := strings.Split(output, "\n")
+	for _, element := range elements {
+		if element != "" {
+			res = append(res, element)
+		}
+	}
+
+	return res
 }

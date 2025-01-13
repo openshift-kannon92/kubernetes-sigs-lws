@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	leaderworkerset "sigs.k8s.io/lws/api/leaderworkerset/v1"
-	"sigs.k8s.io/lws/pkg/utils"
+	revisionutils "sigs.k8s.io/lws/pkg/utils/revision"
 	statefulsetutils "sigs.k8s.io/lws/pkg/utils/statefulset"
 )
 
@@ -150,9 +150,13 @@ func ExpectValidLeaderStatefulSet(ctx context.Context, k8sClient client.Client, 
 		if sts.Spec.Template.Labels[leaderworkerset.SetNameLabelKey] == "" {
 			return fmt.Errorf("leader statefulset pod template misses leaderworkerset label")
 		}
-		hash := utils.LeaderWorkerTemplateHash(&lws)
-		if sts.Labels[leaderworkerset.TemplateRevisionHashKey] != hash {
-			return fmt.Errorf("mismatch template revision hash for leader statefulset, got: %s, want: %s", sts.Spec.Template.Labels[leaderworkerset.TemplateRevisionHashKey], hash)
+		cr, err := revisionutils.NewRevision(ctx, k8sClient, &lws, "")
+		if err != nil {
+			return err
+		}
+		hash := revisionutils.GetRevisionKey(cr)
+		if revisionutils.GetRevisionKey(&sts) != hash {
+			return fmt.Errorf("mismatch template revision hash for leader statefulset, got: %s, want: %s", revisionutils.GetRevisionKey(&sts), hash)
 		}
 		if sts.Spec.ServiceName != lws.Name {
 			return errors.New("leader StatefulSet service name should match leaderWorkerSet name")
@@ -180,9 +184,9 @@ func ExpectValidLeaderStatefulSet(ctx context.Context, k8sClient client.Client, 
 		}
 		// check pod template has correct label
 		if diff := cmp.Diff(sts.Spec.Template.Labels, map[string]string{
-			leaderworkerset.SetNameLabelKey:         lws.Name,
-			leaderworkerset.WorkerIndexLabelKey:     "0",
-			leaderworkerset.TemplateRevisionHashKey: utils.LeaderWorkerTemplateHash(&lws),
+			leaderworkerset.SetNameLabelKey:     lws.Name,
+			leaderworkerset.WorkerIndexLabelKey: "0",
+			leaderworkerset.RevisionKey:         hash,
 		}); diff != "" {
 			return errors.New("leader StatefulSet pod template doesn't have the correct labels: " + diff)
 		}
@@ -271,9 +275,13 @@ func ExpectValidWorkerStatefulSets(ctx context.Context, leaderWorkerSet *leaderw
 			if lws.Annotations[leaderworkerset.ExclusiveKeyAnnotationKey] != sts.Spec.Template.Annotations[leaderworkerset.ExclusiveKeyAnnotationKey] {
 				return fmt.Errorf("mismatch exclusive placement annotation between worker statefulset and leaderworkerset")
 			}
-			hash := utils.LeaderWorkerTemplateHash(&lws)
-			if sts.Labels[leaderworkerset.TemplateRevisionHashKey] != hash {
-				return fmt.Errorf("mismatch template revision hash for worker statefulset, got: %s, want: %s", sts.Labels[leaderworkerset.TemplateRevisionHashKey], hash)
+			cr, err := revisionutils.NewRevision(ctx, k8sClient, &lws, "")
+			if err != nil {
+				return err
+			}
+			hash := revisionutils.GetRevisionKey(cr)
+			if revisionutils.GetRevisionKey(&sts) != hash {
+				return fmt.Errorf("mismatch template revision hash for worker statefulset, got: %s, want: %s", revisionutils.GetRevisionKey(&sts), hash)
 			}
 			if *sts.Spec.Replicas != *lws.Spec.LeaderWorkerTemplate.Size-1 {
 				return errors.New("worker StatefulSet replicas should match leaderWorkerSet replicas")
@@ -289,6 +297,58 @@ func ExpectValidWorkerStatefulSets(ctx context.Context, leaderWorkerSet *leaderw
 			if podTemplateSpec.Spec.Containers[0].Name != sts.Spec.Template.Spec.Containers[0].Name {
 				return errors.New("pod template is not updated, expect " + podTemplateSpec.Spec.Containers[0].Name + ", got " + sts.Spec.Template.Spec.Containers[0].Name)
 			}
+		}
+		return nil
+	}, Timeout, Interval).Should(gomega.Succeed())
+}
+
+// Expect that the revisionKey and the container name in the Worker Sts have been updated
+func ExpectUpdatedWorkerStatefulSet(ctx context.Context, k8sClient client.Client, leaderWorkerSet *leaderworkerset.LeaderWorkerSet, statefulsetName string) {
+	gomega.Eventually(func() error {
+		var lws leaderworkerset.LeaderWorkerSet
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: leaderWorkerSet.Name, Namespace: leaderWorkerSet.Namespace}, &lws); err != nil {
+			return err
+		}
+		var sts appsv1.StatefulSet
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: statefulsetName, Namespace: lws.Namespace}, &sts); err != nil {
+			return err
+		}
+		revision, err := revisionutils.NewRevision(ctx, k8sClient, &lws, "")
+		if err != nil {
+			return err
+		}
+		if revisionutils.GetRevisionKey(&sts) != revisionutils.GetRevisionKey(revision) {
+			return errors.New("workerStatefulSet doesn't have the correct revisionKey")
+		}
+		podTemplateSpec := *lws.Spec.LeaderWorkerTemplate.WorkerTemplate.DeepCopy()
+		if podTemplateSpec.Spec.Containers[0].Name != sts.Spec.Template.Spec.Containers[0].Name {
+			return errors.New("pod template is not updated")
+		}
+		return nil
+	}, Timeout, Interval).Should(gomega.Succeed())
+}
+
+// Expect that the revisionKey and the container name in the Worker Sts have not been updated
+func ExpectNotUpdatedWorkerStatefulSet(ctx context.Context, k8sClient client.Client, leaderWorkerSet *leaderworkerset.LeaderWorkerSet, statefulsetName string) {
+	gomega.Eventually(func() error {
+		var lws leaderworkerset.LeaderWorkerSet
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: leaderWorkerSet.Name, Namespace: leaderWorkerSet.Namespace}, &lws); err != nil {
+			return err
+		}
+		var sts appsv1.StatefulSet
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: statefulsetName, Namespace: lws.Namespace}, &sts); err != nil {
+			return err
+		}
+		revision, err := revisionutils.NewRevision(ctx, k8sClient, &lws, "")
+		if err != nil {
+			return err
+		}
+		if revisionutils.GetRevisionKey(&sts) == revisionutils.GetRevisionKey(revision) {
+			return errors.New("workerStatefulSet has an updated revisionKey")
+		}
+		podTemplateSpec := *lws.Spec.LeaderWorkerTemplate.WorkerTemplate.DeepCopy()
+		if podTemplateSpec.Spec.Containers[0].Name == sts.Spec.Template.Spec.Containers[0].Name {
+			return errors.New("pod template is updated")
 		}
 		return nil
 	}, Timeout, Interval).Should(gomega.Succeed())
@@ -315,9 +375,9 @@ func ExpectLeaderWorkerSetNotProgressing(ctx context.Context, k8sClient client.C
 }
 
 func ExpectLeaderWorkerSetUpgradeInProgress(ctx context.Context, k8sClient client.Client, lws *leaderworkerset.LeaderWorkerSet, message string) {
-	ginkgo.By(fmt.Sprintf("checking leaderworkerset status(%s) is true", leaderworkerset.LeaderWorkerSetUpgradeInProgress))
+	ginkgo.By(fmt.Sprintf("checking leaderworkerset status(%s) is true", leaderworkerset.LeaderWorkerSetUpdateInProgress))
 	condition := metav1.Condition{
-		Type:    string(leaderworkerset.LeaderWorkerSetUpgradeInProgress),
+		Type:    string(leaderworkerset.LeaderWorkerSetUpdateInProgress),
 		Status:  metav1.ConditionTrue,
 		Message: message,
 	}
@@ -325,9 +385,9 @@ func ExpectLeaderWorkerSetUpgradeInProgress(ctx context.Context, k8sClient clien
 }
 
 func ExpectLeaderWorkerSetNoUpgradeInProgress(ctx context.Context, k8sClient client.Client, lws *leaderworkerset.LeaderWorkerSet, message string) {
-	ginkgo.By(fmt.Sprintf("checking leaderworkerset status(%s) is true", leaderworkerset.LeaderWorkerSetUpgradeInProgress))
+	ginkgo.By(fmt.Sprintf("checking leaderworkerset status(%s) is true", leaderworkerset.LeaderWorkerSetUpdateInProgress))
 	condition := metav1.Condition{
-		Type:    string(leaderworkerset.LeaderWorkerSetUpgradeInProgress),
+		Type:    string(leaderworkerset.LeaderWorkerSetUpdateInProgress),
 		Status:  metav1.ConditionFalse,
 		Message: message,
 	}
@@ -382,7 +442,7 @@ func ExpectLeaderWorkerSetUnavailable(ctx context.Context, k8sClient client.Clie
 }
 
 // ValidateLatestEvent will return true if the latest event is as you want.
-func ValidateLatestEvent(ctx context.Context, k8sClient client.Client, eventReason string, eventType string, eventNote string, namespace string) {
+func ValidateEvent(ctx context.Context, k8sClient client.Client, eventReason string, eventType string, eventNote string, namespace string) {
 	gomega.Eventually(func() error {
 		events := &eventsv1.EventList{}
 		if err := k8sClient.List(ctx, events, &client.ListOptions{Namespace: namespace}); err != nil {
@@ -394,12 +454,13 @@ func ValidateLatestEvent(ctx context.Context, k8sClient client.Client, eventReas
 			return fmt.Errorf("no events currently exist")
 		}
 
-		item := events.Items[length-1]
-		if item.Reason == eventReason && item.Type == eventType && item.Note == eventNote {
-			return nil
+		for _, item := range events.Items {
+			if item.Reason == eventReason && item.Type == eventType && item.Note == eventNote {
+				return nil
+			}
 		}
 
-		return fmt.Errorf("mismatch with the latest event: got r:%v t:%v n:%v, reg %v", item.Reason, item.Type, item.Note, item.Regarding)
+		return fmt.Errorf("mismatch with the expected event: expected r:%v t:%v n:%v", eventReason, eventType, eventNote)
 
 	}, Timeout, Interval).Should(gomega.BeNil())
 }
@@ -438,4 +499,44 @@ func ExpectSpecifiedWorkerStatefulSetsNotCreated(ctx context.Context, k8sClient 
 		}
 		return true
 	}, Timeout, Interval).Should(gomega.Equal(true))
+}
+
+func ExpectRevisions(ctx context.Context, k8sClient client.Client, leaderWorkerSet *leaderworkerset.LeaderWorkerSet, numRevisions int) {
+	gomega.Eventually(func() error {
+		selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{
+			leaderworkerset.SetNameLabelKey: leaderWorkerSet.Name,
+		}})
+		if err != nil {
+			return err
+		}
+		revisions, err := revisionutils.ListRevisions(ctx, k8sClient, leaderWorkerSet, selector)
+		if err != nil {
+			return err
+		}
+		if len(revisions) != numRevisions {
+			return fmt.Errorf("expected %d revisions, got %d instead", numRevisions, len(revisions))
+		}
+
+		currentRevision, err := revisionutils.NewRevision(ctx, k8sClient, leaderWorkerSet, "")
+		if err != nil {
+			return err
+		}
+
+		var leaderSts appsv1.StatefulSet
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: leaderWorkerSet.Name, Namespace: leaderWorkerSet.Namespace}, &leaderSts); err != nil {
+			return err
+		}
+		foundRevisionMatch := false
+		for _, revision := range revisions {
+			if revisionutils.GetRevisionKey(revision) == revisionutils.GetRevisionKey(&leaderSts) && revisionutils.EqualRevision(currentRevision, revision) {
+				foundRevisionMatch = true
+			}
+		}
+
+		if !foundRevisionMatch {
+			return fmt.Errorf("no revision matches the current state of lws")
+		}
+
+		return nil
+	}, Timeout, Interval).Should(gomega.Succeed())
 }

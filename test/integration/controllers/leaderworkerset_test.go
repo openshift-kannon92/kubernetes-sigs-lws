@@ -29,9 +29,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	leaderworkerset "sigs.k8s.io/lws/api/leaderworkerset/v1"
+	"sigs.k8s.io/lws/pkg/controllers"
+	revisionutils "sigs.k8s.io/lws/pkg/utils/revision"
 	testing "sigs.k8s.io/lws/test/testutils"
+	"sigs.k8s.io/lws/test/wrappers"
 )
 
 var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
@@ -43,7 +45,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 	}
 	// class representing a testCase
 	type testCase struct {
-		makeLeaderWorkerSet func(nsName string) *testing.LeaderWorkerSetWrapper
+		makeLeaderWorkerSet func(nsName string) *wrappers.LeaderWorkerSetWrapper
 		updates             []*update
 	}
 	ginkgo.DescribeTable("leaderWorkerSet creating or updating",
@@ -85,8 +87,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			}
 		},
 		ginkgo.Entry("scale up number of groups", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(2)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(2)
 			},
 			updates: []*update{
 				{
@@ -104,8 +106,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("scale down number of groups", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(4)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4)
 			},
 			updates: []*update{
 				{
@@ -123,8 +125,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("scale down to 0", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(2)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(2)
 			},
 			updates: []*update{
 				{
@@ -142,8 +144,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("scale up from 0", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(0)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(0)
 			},
 			updates: []*update{
 				{
@@ -161,8 +163,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("group size is 1", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Size(1)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Size(1)
 			},
 			updates: []*update{
 				{
@@ -182,8 +184,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("zero replicas", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(0)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(0)
 			},
 			updates: []*update{
 				{
@@ -195,11 +197,14 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("Successfully create a leaderworkerset with 2 groups, size as 4.", &testCase{
-			makeLeaderWorkerSet: testing.BuildLeaderWorkerSet,
+			makeLeaderWorkerSet: wrappers.BuildLeaderWorkerSet,
 			updates: []*update{
 				{
 					checkLWSState: func(deployment *leaderworkerset.LeaderWorkerSet) {
 						testing.ExpectLeaderSetExist(ctx, deployment, k8sClient)
+						testing.ValidateEvent(ctx, k8sClient, controllers.GroupsProgressing, corev1.EventTypeNormal, "Created leader statefulset test-sample", deployment.Namespace)
+						testing.ValidateEvent(ctx, k8sClient, controllers.GroupsProgressing, corev1.EventTypeNormal, "Created worker statefulset for leader pod test-sample-0", deployment.Namespace)
+						testing.ValidateEvent(ctx, k8sClient, controllers.GroupsProgressing, corev1.EventTypeNormal, "Created worker statefulset for leader pod test-sample-1", deployment.Namespace)
 						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, deployment, 2)
 						testing.ExpectValidWorkerStatefulSets(ctx, deployment, k8sClient, true)
 					},
@@ -207,8 +212,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("Deleted worker statefulSet will be recreated", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(2)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(2)
 			},
 			updates: []*update{
 				{
@@ -225,7 +230,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("headless service created", &testCase{
-			makeLeaderWorkerSet: testing.BuildLeaderWorkerSet,
+			makeLeaderWorkerSet: wrappers.BuildLeaderWorkerSet,
 			updates: []*update{
 				{
 					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
@@ -235,7 +240,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("service deleted will be recreated", &testCase{
-			makeLeaderWorkerSet: testing.BuildLeaderWorkerSet,
+			makeLeaderWorkerSet: wrappers.BuildLeaderWorkerSet,
 			updates: []*update{
 				{
 					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
@@ -257,8 +262,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("subdomain policy LeadersSharedWorkersDedicated, more than one headless service created", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).SubdomainPolicy(leaderworkerset.SubdomainUniquePerReplica)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).SubdomainPolicy(leaderworkerset.SubdomainUniquePerReplica)
 			},
 			updates: []*update{
 				{
@@ -269,7 +274,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("leader statefulset deleted will be recreated", &testCase{
-			makeLeaderWorkerSet: testing.BuildLeaderWorkerSet,
+			makeLeaderWorkerSet: wrappers.BuildLeaderWorkerSet,
 			updates: []*update{
 				{
 					// Fetch the headless service and force delete it, so we can test if it is recreated.
@@ -286,7 +291,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("Able to get scale subResource information", &testCase{
-			makeLeaderWorkerSet: testing.BuildLeaderWorkerSet,
+			makeLeaderWorkerSet: wrappers.BuildLeaderWorkerSet,
 			updates: []*update{
 				{
 					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
@@ -300,7 +305,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("HPA is able trigger scaling up/down through scale endpoint", &testCase{
-			makeLeaderWorkerSet: testing.BuildLeaderWorkerSet,
+			makeLeaderWorkerSet: wrappers.BuildLeaderWorkerSet,
 			updates: []*update{
 				{
 					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
@@ -330,7 +335,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("Test available state", &testCase{
-			makeLeaderWorkerSet: testing.BuildLeaderWorkerSet,
+			makeLeaderWorkerSet: wrappers.BuildLeaderWorkerSet,
 			updates: []*update{
 				{
 					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
@@ -343,17 +348,17 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("Testing condition switch from progressing to available to progressing", &testCase{
-			makeLeaderWorkerSet: testing.BuildLeaderWorkerSet,
+			makeLeaderWorkerSet: wrappers.BuildLeaderWorkerSet,
 			updates: []*update{
 				{
 					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
 						testing.ExpectLeaderWorkerSetProgressing(ctx, k8sClient, lws, "Replicas are progressing")
-						testing.ValidateLatestEvent(ctx, k8sClient, "GroupsAreProgressing", corev1.EventTypeNormal, "Replicas are progressing, with 0 groups ready of total 2 groups", lws.Namespace)
+						testing.ValidateEvent(ctx, k8sClient, controllers.GroupsProgressing, corev1.EventTypeNormal, "Replicas are progressing, with 0 groups ready of total 2 groups", lws.Namespace)
 						// Force groups to ready.
 						testing.SetPodGroupsToReady(ctx, k8sClient, lws, 2)
 						testing.ExpectLeaderWorkerSetNotProgressing(ctx, k8sClient, lws, "Replicas are progressing")
 						testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
-						testing.ValidateLatestEvent(ctx, k8sClient, "AllGroupsReady", corev1.EventTypeNormal, "All replicas are ready, with 2 groups ready of total 2 groups", lws.Namespace)
+						testing.ValidateEvent(ctx, k8sClient, "AllGroupsReady", corev1.EventTypeNormal, "All replicas are ready, with 2 groups ready of total 2 groups", lws.Namespace)
 						// Force a reconcile. Refetch most recent version of LWS, increase replicas.
 						patch := client.MergeFrom(&leaderworkerset.LeaderWorkerSet{
 							ObjectMeta: metav1.ObjectMeta{
@@ -373,14 +378,14 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 						testing.ExpectLeaderWorkerSetProgressing(ctx, k8sClient, lws, "Replicas are progressing")
 						testing.ExpectLeaderWorkerSetUnavailable(ctx, k8sClient, lws, "All replicas are ready")
 						// Check most recent event.
-						testing.ValidateLatestEvent(ctx, k8sClient, "GroupsAreProgressing", corev1.EventTypeNormal, "Replicas are progressing, with 2 groups ready of total 3 groups", lws.Namespace)
+						testing.ValidateEvent(ctx, k8sClient, controllers.GroupsProgressing, corev1.EventTypeNormal, "Replicas are progressing, with 2 groups ready of total 3 groups", lws.Namespace)
 					},
 				},
 			},
 		}),
 		ginkgo.Entry("Leader/worker pods/Statefulset have required labels and annotations when exclusive placement enabled", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).ExclusivePlacement()
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).ExclusivePlacement()
 			},
 			updates: []*update{
 				{
@@ -392,8 +397,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("Pod restart will not recreate the pod group when restart policy is None", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).RestartPolicy(leaderworkerset.NoneRestartPolicy).Replica(1).Size(3)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).RestartPolicy(leaderworkerset.NoneRestartPolicy).Replica(1).Size(3)
 			},
 			updates: []*update{
 				{
@@ -421,8 +426,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("Pod restart will delete the pod group when restart policy is RecreateGroupOnPodRestart", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).RestartPolicy(leaderworkerset.RecreateGroupOnPodRestart).Replica(1).Size(3)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).RestartPolicy(leaderworkerset.RecreateGroupOnPodRestart).Replica(1).Size(3)
 			},
 			updates: []*update{
 				{
@@ -441,30 +446,31 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 						var leaderPod corev1.Pod
 						gomega.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: lws.Name + "-0", Namespace: lws.Namespace}, &leaderPod)).To(gomega.Succeed())
 						gomega.Expect(leaderPod.DeletionTimestamp != nil).To(gomega.BeTrue())
+						testing.ValidateEvent(ctx, k8sClient, "RecreateGroupOnPodRestart", corev1.EventTypeNormal, "Worker pod test-sample-0-1 failed, deleted leader pod test-sample-0 to recreate group 0", lws.Namespace)
 					},
 				},
 			},
 		}),
 		ginkgo.Entry("Replicas are processing will set condition to progressing with correct message with correct event", &testCase{
-			makeLeaderWorkerSet: testing.BuildLeaderWorkerSet,
+			makeLeaderWorkerSet: wrappers.BuildLeaderWorkerSet,
 			updates: []*update{
 				{
 					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
 						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 2)
 						testing.ExpectValidWorkerStatefulSets(ctx, lws, k8sClient, true)
 						testing.ExpectLeaderWorkerSetProgressing(ctx, k8sClient, lws, "Replicas are progressing")
-						testing.ValidateLatestEvent(ctx, k8sClient, "GroupsAreProgressing", corev1.EventTypeNormal, "Replicas are progressing, with 0 groups ready of total 2 groups", lws.Namespace)
+						testing.ValidateEvent(ctx, k8sClient, controllers.GroupsProgressing, corev1.EventTypeNormal, "Replicas are progressing, with 0 groups ready of total 2 groups", lws.Namespace)
 					},
 				},
 			},
 		}),
 		ginkgo.Entry("Test default progressing state", &testCase{
-			makeLeaderWorkerSet: testing.BuildLeaderWorkerSet,
+			makeLeaderWorkerSet: wrappers.BuildLeaderWorkerSet,
 			updates: []*update{
 				{
 					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
 						lws.Status.Conditions = []metav1.Condition{}
-						gomega.Expect(k8sClient.Status().Update(ctx, lws)).Should(gomega.Succeed())
+						gomega.Eventually(k8sClient.Status().Update(ctx, lws), testing.Timeout, testing.Interval).Should(gomega.Succeed())
 					},
 					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
 						testing.ExpectLeaderWorkerSetProgressing(ctx, k8sClient, lws, "Replicas are progressing")
@@ -473,7 +479,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("Leaderworkerset has available state with correct event", &testCase{
-			makeLeaderWorkerSet: testing.BuildLeaderWorkerSet,
+			makeLeaderWorkerSet: wrappers.BuildLeaderWorkerSet,
 			updates: []*update{
 				{
 					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
@@ -481,7 +487,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 					},
 					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
 						testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
-						testing.ValidateLatestEvent(ctx, k8sClient, "AllGroupsReady", corev1.EventTypeNormal, "All replicas are ready, with 2 groups ready of total 2 groups", lws.Namespace)
+						testing.ValidateEvent(ctx, k8sClient, "AllGroupsReady", corev1.EventTypeNormal, "All replicas are ready, with 2 groups ready of total 2 groups", lws.Namespace)
 					},
 				},
 			},
@@ -489,8 +495,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 
 		// Rolling update test cases
 		ginkgo.Entry("leaderTemplate changed with default strategy", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(4)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4)
 			},
 			updates: []*update{
 				{
@@ -518,6 +524,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 						testing.ExpectLeaderWorkerSetUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
 						// This should be 4 at the first step, however, reconciliation syncs quickly and
 						// soon updated to 3 (replicas-maxUnavailable), it's fine here.
+						testing.ValidateEvent(ctx, k8sClient, controllers.GroupsUpdating, corev1.EventTypeNormal, "Updating replicas 4 to 3", lws.Namespace)
 						testing.ExpectStatefulsetPartitionEqualTo(ctx, k8sClient, lws, 3)
 						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 4, 0)
 					},
@@ -532,6 +539,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 						testing.ExpectLeaderWorkerSetUnavailable(ctx, k8sClient, lws, "All replicas are ready")
 						testing.ExpectLeaderWorkerSetProgressing(ctx, k8sClient, lws, "Replicas are progressing")
 						testing.ExpectLeaderWorkerSetUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
+						testing.ValidateEvent(ctx, k8sClient, controllers.GroupsUpdating, corev1.EventTypeNormal, "Updating replicas 3 to 2", lws.Namespace)
 						testing.ExpectStatefulsetPartitionEqualTo(ctx, k8sClient, lws, 2)
 						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 4, 1)
 					},
@@ -585,8 +593,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("workerTemplate changed with maxUnavailable=2", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(4).MaxUnavailable(2)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4).MaxUnavailable(2)
 			},
 			updates: []*update{
 				{
@@ -663,8 +671,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("workerTemplate changed with maxUnavailable greater than replicas", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(4).MaxUnavailable(10)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4).MaxUnavailable(10)
 			},
 			updates: []*update{
 				{
@@ -712,8 +720,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("rolling update with both worker template and number of replicas changed", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(4)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4)
 			},
 			updates: []*update{
 				{
@@ -772,8 +780,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("replicas increases during rolling update", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(4)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4)
 			},
 			updates: []*update{
 				{
@@ -864,8 +872,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("replicas decreases during rolling update", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(6)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(6)
 			},
 			updates: []*update{
 				{
@@ -944,8 +952,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("rolling update with maxSurge set", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(4).MaxSurge(1)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4).MaxSurge(1)
 			},
 			updates: []*update{
 				{
@@ -1063,8 +1071,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("rolling update with replicas scaled up and maxSurge set", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).MaxSurge(2)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).MaxSurge(2)
 			},
 			updates: []*update{
 				{
@@ -1132,8 +1140,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("rolling update with replicas scaled down and maxSurge set", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(6).MaxSurge(2)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(6).MaxSurge(2)
 			},
 			updates: []*update{
 				{
@@ -1198,8 +1206,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("rolling update with maxSurge greater than replicas", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).MaxSurge(4)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).MaxSurge(4)
 			},
 			updates: []*update{
 				{
@@ -1268,8 +1276,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("scale up and down during rolling update with maxSurge set", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(4).MaxSurge(2)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4).MaxSurge(2)
 			},
 			updates: []*update{
 				{
@@ -1425,8 +1433,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("multiple rolling update with maxSurge set", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(4).MaxSurge(2)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4).MaxSurge(2)
 			},
 			updates: []*update{
 				{
@@ -1440,6 +1448,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
 						testing.ExpectValidWorkerStatefulSets(ctx, lws, k8sClient, true)
 						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 4, 4)
+						testing.ExpectRevisions(ctx, k8sClient, lws, 1)
 					},
 				},
 				{
@@ -1466,6 +1475,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 						testing.ExpectLeaderWorkerSetUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
 						testing.ExpectStatefulsetPartitionEqualTo(ctx, k8sClient, lws, 3)
 						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 4, 0)
+						testing.ExpectRevisions(ctx, k8sClient, lws, 2)
 					},
 				},
 				{
@@ -1481,6 +1491,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 						testing.ExpectLeaderWorkerSetUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
 						testing.ExpectStatefulsetPartitionEqualTo(ctx, k8sClient, lws, 1)
 						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 6, 2)
+						testing.ExpectRevisions(ctx, k8sClient, lws, 2)
 					},
 				},
 				{
@@ -1503,6 +1514,7 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 						// Partition will transit from 4 to 3.
 						testing.ExpectStatefulsetPartitionEqualTo(ctx, k8sClient, lws, 3)
 						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 6, 0)
+						testing.ExpectRevisions(ctx, k8sClient, lws, 3)
 					},
 				},
 				{
@@ -1527,13 +1539,227 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 						testing.ExpectLeaderWorkerSetNoUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
 						testing.ExpectStatefulsetPartitionEqualTo(ctx, k8sClient, lws, 0)
 						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 4, 4)
+						testing.ExpectRevisions(ctx, k8sClient, lws, 1)
+					},
+				},
+			},
+		}),
+		ginkgo.Entry("Not updated worker gets recreated with old worker spec if restarted during update", &testCase{
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4)
+			},
+			updates: []*update{
+				{
+					// Set lws to available condition.
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.SetPodGroupsToReady(ctx, k8sClient, lws, 4)
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
+						testing.ExpectValidWorkerStatefulSets(ctx, lws, k8sClient, true)
+						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 4, 4)
+						testing.ExpectRevisions(ctx, k8sClient, lws, 1)
+					},
+				},
+				{
+					// Check the rolling update initial state.
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.UpdateWorkerTemplate(ctx, k8sClient, lws)
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
+						testing.ExpectLeaderWorkerSetUnavailable(ctx, k8sClient, lws, "All replicas are ready")
+						testing.ExpectLeaderWorkerSetProgressing(ctx, k8sClient, lws, "Replicas are progressing")
+						testing.ExpectLeaderWorkerSetUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
+						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 4, 0)
+						testing.ExpectRevisions(ctx, k8sClient, lws, 2)
+					},
+				},
+				{
+					// Rolling update 1 replica.
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.SetPodGroupToReady(ctx, k8sClient, lws.Name+"-3", lws)
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
+						testing.ExpectUpdatedWorkerStatefulSet(ctx, k8sClient, lws, lws.Name+"-3")
+						testing.ExpectNotUpdatedWorkerStatefulSet(ctx, k8sClient, lws, lws.Name+"-2")
+						testing.ExpectNotUpdatedWorkerStatefulSet(ctx, k8sClient, lws, lws.Name+"-1")
+						testing.ExpectNotUpdatedWorkerStatefulSet(ctx, k8sClient, lws, lws.Name+"-0")
+						testing.ExpectRevisions(ctx, k8sClient, lws, 2)
+						testing.ExpectLeaderWorkerSetUnavailable(ctx, k8sClient, lws, "All replicas are ready")
+						testing.ExpectLeaderWorkerSetProgressing(ctx, k8sClient, lws, "Replicas are progressing")
+						testing.ExpectLeaderWorkerSetUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
+						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 4, 1)
+					},
+				},
+				{
+					// Delete the leaderPod and re-create it to force workerSts to be created
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.DeleteLeaderPod(ctx, k8sClient, lws, 0, 1)
+						var leaderSts appsv1.StatefulSet
+						gomega.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: lws.Name, Namespace: lws.Namespace}, &leaderSts)).To(gomega.Succeed())
+						testing.CreateLeaderPodsFromRevisionNumber(ctx, leaderSts, k8sClient, lws, 0, 1, 1)
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
+						testing.ExpectUpdatedWorkerStatefulSet(ctx, k8sClient, lws, lws.Name+"-3")
+						testing.ExpectNotUpdatedWorkerStatefulSet(ctx, k8sClient, lws, lws.Name+"-2")
+						testing.ExpectNotUpdatedWorkerStatefulSet(ctx, k8sClient, lws, lws.Name+"-1")
+						testing.ExpectNotUpdatedWorkerStatefulSet(ctx, k8sClient, lws, lws.Name+"-0")
+						testing.ExpectRevisions(ctx, k8sClient, lws, 2)
+						testing.ExpectLeaderWorkerSetUnavailable(ctx, k8sClient, lws, "All replicas are ready")
+						testing.ExpectLeaderWorkerSetProgressing(ctx, k8sClient, lws, "Replicas are progressing")
+						testing.ExpectLeaderWorkerSetUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
+					},
+				},
+				{
+					// Rolling update all the replicas will make the leader statefulset ready again.
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.SetPodGroupsToReady(ctx, k8sClient, lws, 4)
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
+						testing.ExpectValidWorkerStatefulSets(ctx, lws, k8sClient, true)
+						testing.ExpectLeaderWorkerSetNotProgressing(ctx, k8sClient, lws, "Replicas are progressing")
+						testing.ExpectLeaderWorkerSetNoUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
+						testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+						testing.ExpectRevisions(ctx, k8sClient, lws, 1)
+					},
+				},
+			},
+		}),
+		ginkgo.Entry("leader with RecreateGroupOnPodRestart only gets restarted once during rolling update", &testCase{
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4).RestartPolicy(leaderworkerset.RecreateGroupOnPodRestart)
+			},
+			updates: []*update{
+				{
+					// Set lws to available condition.
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.SetPodGroupsToReady(ctx, k8sClient, lws, 4)
+						var leaderPod corev1.Pod
+						gomega.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: lws.Name + "-3", Namespace: lws.Namespace}, &leaderPod)).To(gomega.Succeed())
+						testing.CreateWorkerPodsForLeaderPod(ctx, leaderPod, k8sClient, *lws)
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
+						testing.ExpectValidWorkerStatefulSets(ctx, lws, k8sClient, true)
+						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 4, 4)
+					},
+				},
+				{
+					// Check the rolling update initial state.
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.UpdateWorkerTemplate(ctx, k8sClient, lws)
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
+						testing.ExpectLeaderWorkerSetUnavailable(ctx, k8sClient, lws, "All replicas are ready")
+						testing.ExpectLeaderWorkerSetProgressing(ctx, k8sClient, lws, "Replicas are progressing")
+						testing.ExpectLeaderWorkerSetUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
+						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 4, 0)
+					},
+				},
+				{
+					// Update LeaderPod. Triggers the first restart
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.SetPodGroupToReady(ctx, k8sClient, lws.Name+"-3", lws)
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
+						testing.ExpectLeaderWorkerSetUnavailable(ctx, k8sClient, lws, "All replicas are ready")
+						testing.ExpectLeaderWorkerSetProgressing(ctx, k8sClient, lws, "Replicas are progressing")
+						testing.ExpectLeaderWorkerSetUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
+						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 4, 1)
+					},
+				},
+				{ // The workerPods are deleted to update them. This should not delete the leaderPod
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.DeleteWorkerPods(ctx, k8sClient, lws)
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						var leaderPod corev1.Pod
+						gomega.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: lws.Name + "-3", Namespace: lws.Namespace}, &leaderPod)).To(gomega.Succeed())
+						gomega.Consistently(leaderPod.DeletionTimestamp == nil, testing.Timeout, testing.Interval).Should(gomega.BeTrue())
+					},
+				},
+				{
+					// Rolling update all the replicas will make the leader statefulset ready again.
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.SetPodGroupsToReady(ctx, k8sClient, lws, 4)
+						// Need to create the updated workerPods since the sts controller doesn't exist in integration tests
+						var leaderPod corev1.Pod
+						gomega.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: lws.Name + "-3", Namespace: lws.Namespace}, &leaderPod)).To(gomega.Succeed())
+						testing.CreateWorkerPodsForLeaderPod(ctx, leaderPod, k8sClient, *lws)
+
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
+						testing.ExpectValidWorkerStatefulSets(ctx, lws, k8sClient, true)
+						testing.ExpectLeaderWorkerSetNotProgressing(ctx, k8sClient, lws, "Replicas are progressing")
+						testing.ExpectLeaderWorkerSetNoUpgradeInProgress(ctx, k8sClient, lws, "Rolling Upgrade is in progress")
+						testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+					},
+				},
+				{ // Validate that RecreateGroupOnPodRestart works as intended after update
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						var workers corev1.PodList
+						gomega.Expect(k8sClient.List(ctx, &workers, client.InNamespace(lws.Namespace), &client.MatchingLabels{"worker.pod": "workers", leaderworkerset.GroupIndexLabelKey: "3"})).To(gomega.Succeed())
+						gomega.Expect(k8sClient.Delete(ctx, &workers.Items[0])).To(gomega.Succeed())
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						// we could only check the leader pod is marked for deletion since it will be pending on its dependents; and the dependents
+						// won't be deleted automatically in integration test
+						var leaderPod corev1.Pod
+						gomega.Eventually(func() bool {
+							gomega.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: lws.Name + "-3", Namespace: lws.Namespace}, &leaderPod)).To(gomega.Succeed())
+							return leaderPod.DeletionTimestamp != nil
+						}, testing.Timeout, testing.Interval).Should(gomega.BeTrue())
+					},
+				},
+			},
+		}),
+		ginkgo.Entry("if a leaderSts exists, but a matching controllerRevision doesn't, it will create one that matches the leaderSts", &testCase{
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName)
+			},
+			updates: []*update{
+				{
+					// Update LeaderPod. Triggers the first restart
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.SetPodGroupsToReady(ctx, k8sClient, lws, 2)
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+						testing.ExpectRevisions(ctx, k8sClient, lws, 1)
+						// Special case we are trying to test by overwriting the revision key that the leaderSts has.
+						gomega.Eventually(func() bool {
+							var leaderSts appsv1.StatefulSet
+							if err := k8sClient.Get(ctx, types.NamespacedName{Name: lws.Name, Namespace: lws.Namespace}, &leaderSts); err != nil {
+								return false
+							}
+							leaderSts.Labels[leaderworkerset.RevisionKey] = "template-hash"
+							if err := k8sClient.Update(ctx, &leaderSts); err != nil {
+								return false
+							}
+							revision, err := revisionutils.GetRevision(ctx, k8sClient, lws, "template-hash")
+							gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
+							return revision != nil
+						}, testing.Timeout, testing.Interval).Should(gomega.BeTrue())
+						testing.SetPodGroupsToReady(ctx, k8sClient, lws, 2)
+						testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+						testing.ExpectRevisions(ctx, k8sClient, lws, 1)
+						testing.ExpectLeaderWorkerSetStatusReplicas(ctx, k8sClient, lws, 2, 2)
 					},
 				},
 			},
 		}),
 		ginkgo.Entry("create a leaderworkerset with spec.startupPolicy=LeaderReady", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(4).StartupPolicy(leaderworkerset.LeaderReadyStartupPolicy)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4).StartupPolicy(leaderworkerset.LeaderReadyStartupPolicy)
 			},
 			updates: []*update{
 				{
@@ -1561,8 +1787,8 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 			},
 		}),
 		ginkgo.Entry("create a leaderworkerset with spec.startupPolicy=LeaderCreated", &testCase{
-			makeLeaderWorkerSet: func(nsName string) *testing.LeaderWorkerSetWrapper {
-				return testing.BuildLeaderWorkerSet(nsName).Replica(4).StartupPolicy(leaderworkerset.LeaderCreatedStartupPolicy)
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).Replica(4).StartupPolicy(leaderworkerset.LeaderCreatedStartupPolicy)
 			},
 			updates: []*update{
 				{

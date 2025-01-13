@@ -16,7 +16,7 @@ machine type for your nodes.**
 To install a released version of LeaderWorkerSet in your cluster, run the following command:
 
 ```shell
-VERSION=v0.4.2
+VERSION=v0.5.0
 kubectl apply --server-side -f https://github.com/kubernetes-sigs/lws/releases/download/$VERSION/manifests.yaml
 ```
 
@@ -25,7 +25,7 @@ kubectl apply --server-side -f https://github.com/kubernetes-sigs/lws/releases/d
 To uninstall a released version of LeaderWorkerSet from your cluster, run the following command:
 
 ```shell
-VERSION=v0.4.2
+VERSION=v0.5.0
 kubectl delete -f https://github.com/kubernetes-sigs/lws/releases/download/$VERSION/manifests.yaml
 ```
 
@@ -70,32 +70,14 @@ make undeploy
 # Install in a different namespace
 
 To install the leaderWorkerSet controller in a different namespace rather than `lws-system`, you should first:
-
 ```sh
 git clone https://github.com/kubernetes-sigs/lws.git
 cd lws
 ```
-
 Then change the [kustomization.yaml](../../config/default/kustomization.yaml) _namespace_ field as:
-
 ```yaml
 namespace: <your-namespace>
 ```
-
-You should change the [manager_auth_proxy_patch.yaml](../../config/default/manager_auth_proxy_patch.yaml) as well:
-
-```yaml
-- name: manager
-  args:
-  - "--namespace=<your-namespace>"
-```
-
-Finally run:
-
-```
-IMAGE_REGISTRY=<registry>/<project> make image-push deploy
-```
-
 
 # Optional: Use cert manager instead of internal cert
 The webhooks use an internal certificate by default. However, if you wish to use cert-manager (which
@@ -113,3 +95,6 @@ Next, in the file ``lws/config/default/kustomization.yaml`` replace ``../interna
 
 Finally, install the cert manager follwing the link: https://cert-manager.io/docs/installation/#default-static-install
 and apply these configurations to your cluster with ``kubectl apply --server-side -k config/default``.
+
+# Install with helm chart
+See [lws/charts](../../charts/lws/README.md)

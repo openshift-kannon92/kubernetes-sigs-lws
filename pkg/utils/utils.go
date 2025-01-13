@@ -19,11 +19,15 @@ package utils
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"os"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+)
 
-	leaderworkerset "sigs.k8s.io/lws/api/leaderworkerset/v1"
+const (
+	defaultNamespace = "lws-system"
 )
 
 // Sha1Hash accepts an input string and returns the 40 character SHA1 hash digest of the input string.
@@ -38,16 +42,6 @@ func NonZeroValue(value int32) int32 {
 		return 0
 	}
 	return value
-}
-
-func LeaderWorkerTemplateHash(lws *leaderworkerset.LeaderWorkerSet) string {
-	if lws.Spec.NetworkConfig == nil || string(*lws.Spec.NetworkConfig.SubdomainPolicy) == string(leaderworkerset.SubdomainShared) {
-		return Sha1Hash(lws.Spec.LeaderWorkerTemplate.LeaderTemplate.String() +
-			lws.Spec.LeaderWorkerTemplate.WorkerTemplate.String())
-	}
-
-	return Sha1Hash(lws.Spec.LeaderWorkerTemplate.LeaderTemplate.String() +
-		lws.Spec.LeaderWorkerTemplate.WorkerTemplate.String() + string(*lws.Spec.NetworkConfig.SubdomainPolicy))
 }
 
 // SortByIndex returns an ascending list, the length of the list is always specified by the parameter.
@@ -69,4 +63,14 @@ func SortByIndex[T appsv1.StatefulSet | corev1.Pod | int](indexFunc func(T) (int
 	}
 
 	return result
+}
+
+// GetOperatorNamespace will pick the namespace based on the serviceaccount
+func GetOperatorNamespace() string {
+	if data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+		if ns := strings.TrimSpace(string(data)); len(ns) > 0 {
+			return ns
+		}
+	}
+	return defaultNamespace
 }
