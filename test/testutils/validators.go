@@ -38,7 +38,7 @@ import (
 )
 
 const (
-	Timeout  = 30 * time.Second
+	Timeout  = 2 * time.Minute
 	Interval = time.Millisecond * 250
 )
 
@@ -394,6 +394,16 @@ func ExpectLeaderWorkerSetNoUpgradeInProgress(ctx context.Context, k8sClient cli
 	gomega.Eventually(CheckLeaderWorkerSetHasCondition, Timeout, Interval).WithArguments(ctx, k8sClient, lws, condition).Should(gomega.Equal(true))
 }
 
+func ExpectLeaderWorkerSetNotExist(ctx context.Context, lws *leaderworkerset.LeaderWorkerSet, k8sClient client.Client) {
+	gomega.Eventually(func() bool {
+		var leaderSet leaderworkerset.LeaderWorkerSet
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: lws.Name, Namespace: lws.Namespace}, &leaderSet); err != nil {
+			return apierrors.IsNotFound(err)
+		}
+		return false
+	}, Timeout, Interval).Should(gomega.Equal(true))
+}
+
 func ExpectLeaderWorkerSetStatusReplicas(ctx context.Context, k8sClient client.Client, lws *leaderworkerset.LeaderWorkerSet, readyReplicas, updatedReplicas int) {
 	ginkgo.By("checking leaderworkerset status replicas")
 	gomega.Eventually(func() error {
@@ -460,7 +470,12 @@ func ValidateEvent(ctx context.Context, k8sClient client.Client, eventReason str
 			}
 		}
 
-		return fmt.Errorf("mismatch with the expected event: expected r:%v t:%v n:%v", eventReason, eventType, eventNote)
+		fmt.Printf("Events found in namespace %s:\n", namespace)
+		for _, item := range events.Items {
+			fmt.Printf("  Reason: %s, Type: %s, Note: %s\n", item.Reason, item.Type, item.Note)
+		}
+
+		return fmt.Errorf("mismatch with the expected event: expected r:%v t:%v n:%v; got r:%v t:%v n:%v", eventReason, eventType, eventNote, events.Items[0].Reason, events.Items[0].Type, events.Items[0].Note)
 
 	}, Timeout, Interval).Should(gomega.BeNil())
 }

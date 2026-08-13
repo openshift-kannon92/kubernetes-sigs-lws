@@ -18,17 +18,28 @@ limitations under the License.
 package v1
 
 import (
-	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
+	metav1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
 // LeaderWorkerSetStatusApplyConfiguration represents a declarative configuration of the LeaderWorkerSetStatus type for use
 // with apply.
+//
+// LeaderWorkerSetStatus defines the observed state of LeaderWorkerSet
 type LeaderWorkerSetStatusApplyConfiguration struct {
-	Conditions      []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
-	ReadyReplicas   *int32                           `json:"readyReplicas,omitempty"`
-	UpdatedReplicas *int32                           `json:"updatedReplicas,omitempty"`
-	Replicas        *int32                           `json:"replicas,omitempty"`
-	HPAPodSelector  *string                          `json:"hpaPodSelector,omitempty"`
+	// conditions track the condition of the leaderworkerset.
+	Conditions []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
+	// readyReplicas track the number of groups that are in ready state (updated or not).
+	ReadyReplicas *int32 `json:"readyReplicas,omitempty"`
+	// updatedReplicas track the number of groups that have been updated (ready or not).
+	UpdatedReplicas *int32 `json:"updatedReplicas,omitempty"`
+	// replicas track the total number of groups that have been created (updated or not, ready or not)
+	Replicas *int32 `json:"replicas,omitempty"`
+	// hpaPodSelector for pods that belong to the LeaderWorkerSet object, this is
+	// needed for HPA to know what pods belong to the LeaderWorkerSet object. Here
+	// we only select the leader pods.
+	HPAPodSelector *string `json:"hpaPodSelector,omitempty"`
+	// observedGeneration is the most recent generation observed for this LeaderWorkerSet.
+	ObservedGeneration *int64 `json:"observedGeneration,omitempty"`
 }
 
 // LeaderWorkerSetStatusApplyConfiguration constructs a declarative configuration of the LeaderWorkerSetStatus type for use with
@@ -40,7 +51,7 @@ func LeaderWorkerSetStatus() *LeaderWorkerSetStatusApplyConfiguration {
 // WithConditions adds the given value to the Conditions field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Conditions field.
-func (b *LeaderWorkerSetStatusApplyConfiguration) WithConditions(values ...*v1.ConditionApplyConfiguration) *LeaderWorkerSetStatusApplyConfiguration {
+func (b *LeaderWorkerSetStatusApplyConfiguration) WithConditions(values ...*metav1.ConditionApplyConfiguration) *LeaderWorkerSetStatusApplyConfiguration {
 	for i := range values {
 		if values[i] == nil {
 			panic("nil value passed to WithConditions")
@@ -79,5 +90,13 @@ func (b *LeaderWorkerSetStatusApplyConfiguration) WithReplicas(value int32) *Lea
 // If called multiple times, the HPAPodSelector field is set to the value of the last call.
 func (b *LeaderWorkerSetStatusApplyConfiguration) WithHPAPodSelector(value string) *LeaderWorkerSetStatusApplyConfiguration {
 	b.HPAPodSelector = &value
+	return b
+}
+
+// WithObservedGeneration sets the ObservedGeneration field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ObservedGeneration field is set to the value of the last call.
+func (b *LeaderWorkerSetStatusApplyConfiguration) WithObservedGeneration(value int64) *LeaderWorkerSetStatusApplyConfiguration {
+	b.ObservedGeneration = &value
 	return b
 }

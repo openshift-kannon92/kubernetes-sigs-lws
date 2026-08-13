@@ -1,8 +1,17 @@
 resources:
 - manager.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+- files:
+  - controller_manager_config.yaml
+  name: manager-config
+
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
 - name: controller
-  newName: gcr.io/k8s-staging-lws/lws
-  newTag: v0.4.0-65-g6367828-dirty
+  newName: us-central1-docker.pkg.dev/k8s-staging-images/lws/lws
+  newTag: main

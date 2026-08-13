@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/onsi/ginkgo/v2"
@@ -88,7 +89,7 @@ var _ = ginkgo.Describe("leaderWorkerSet e2e tests", func() {
 			}
 
 			for _, expectedAnnotation := range expectedAnnotations {
-				gomega.Expect(pod.Labels[expectedAnnotation]).To(gomega.Not(gomega.BeNil()))
+				gomega.Expect(pod.Annotations[expectedAnnotation]).To(gomega.Not(gomega.BeNil()))
 			}
 		}
 
@@ -114,6 +115,19 @@ var _ = ginkgo.Describe("leaderWorkerSet e2e tests", func() {
 		testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
 		testing.ExpectValidWorkerStatefulSets(ctx, lws, k8sClient, true)
 		testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+	})
+
+	ginkgo.It("Can delete a lws with foreground", func() {
+		lws = wrappers.BuildLeaderWorkerSet(ns.Name).Obj()
+		testing.MustCreateLws(ctx, k8sClient, lws)
+
+		testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+
+		// delete lws with foreground
+		testing.DeleteLWSWithForground(ctx, k8sClient, lws)
+
+		// Check that the leaderWorkerSet is deleted
+		testing.ExpectLeaderWorkerSetNotExist(ctx, lws, k8sClient)
 	})
 
 	ginkgo.It("Can perform a rolling update", func() {
@@ -150,6 +164,42 @@ var _ = ginkgo.Describe("leaderWorkerSet e2e tests", func() {
 		testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
 	})
 
+	ginkgo.It("Can perform a rolling update with maxUnavailable zero and maxSurge set", func() {
+		lws := wrappers.BuildLeaderWorkerSet(ns.Name).Replica(4).MaxSurge(1).MaxUnavailable(0).Obj()
+		testing.MustCreateLws(ctx, k8sClient, lws)
+
+		// Wait for leaderWorkerSet to be ready then update it.
+		testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+		testing.UpdateWorkerTemplate(ctx, k8sClient, lws)
+
+		// Happen during rolling update. MaxSurge=1, so we expect up to 5 replicas.
+		testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 5)
+
+		// Rolling update completes.
+		testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 4)
+		testing.ExpectValidWorkerStatefulSets(ctx, lws, k8sClient, true)
+		testing.ExpectValidPods(ctx, k8sClient, lws, &corev1.PodList{})
+		// Wait for leaderWorkerSet to be ready again.
+		testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+	})
+
+	ginkgo.It("Can perform a rolling update even if old lws not ready", func() {
+		// Create lws with not exist image.
+		lws := wrappers.BuildLeaderWorkerSet(ns.Name).LeaderTemplate(nil).Size(1).Replica(2).MaxSurge(1).MaxUnavailable(0).Obj()
+		lws.Spec.LeaderWorkerTemplate.WorkerTemplate.Spec.Containers[0].Image = "not-exist-image:v1"
+		testing.MustCreateLws(ctx, k8sClient, lws)
+
+		//Update lws.
+		testing.UpdateWorkerTemplateImage(ctx, k8sClient, lws)
+
+		// Rolling update completes.
+		testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 2)
+		testing.ExpectValidWorkerStatefulSets(ctx, lws, k8sClient, true)
+		testing.ExpectValidPods(ctx, k8sClient, lws, &corev1.PodList{})
+		// Wait for leaderWorkerSet to be ready again.
+		testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+	})
+
 	ginkgo.It("Can deploy lws with subgroupsize set", func() {
 		leaderPodSpec := wrappers.MakeLeaderPodSpecWithTPUResource()
 		workerPodSpec := wrappers.MakeWorkerPodSpecWithTPUResource()
@@ -172,7 +222,7 @@ var _ = ginkgo.Describe("leaderWorkerSet e2e tests", func() {
 			}
 
 			for _, expectedAnnotation := range expectedAnnotations {
-				gomega.Expect(pod.Labels[expectedAnnotation]).To(gomega.Not(gomega.BeNil()))
+				gomega.Expect(pod.Annotations[expectedAnnotation]).To(gomega.Not(gomega.BeNil()))
 			}
 
 		}
@@ -208,6 +258,48 @@ var _ = ginkgo.Describe("leaderWorkerSet e2e tests", func() {
 		for _, p := range lwsPods.Items {
 			gomega.Expect(testing.HasTPUEnvVarsPopulated(p)).To(gomega.BeTrue())
 		}
+	})
+
+	ginkgo.It("Adds env vars to multiple containers when using TPU", func() {
+		leaderPodSpec := wrappers.MakeLeaderPodSpecWithTwoTPUContainers()
+		lws = wrappers.BuildLeaderWorkerSet(ns.Name).Replica(2).Size(2).LeaderTemplateSpec(leaderPodSpec).WorkerTemplateSpec(leaderPodSpec).Obj()
+
+		testing.MustCreateLws(ctx, k8sClient, lws)
+		lwsPods := &corev1.PodList{}
+		testing.ExpectValidPods(ctx, k8sClient, lws, lwsPods)
+
+		for _, p := range lwsPods.Items {
+			gomega.Expect(testing.HasTPUEnvVarsPopulated(p)).To(gomega.BeTrue())
+			// Correctness of IDs and ports is checked inside CheckTPUContainerHasCorrectEnvVars
+			// We need expected hostnames string.
+			// For replica 2, size 2:
+			groupIndex := p.Labels[leaderworkerset.GroupIndexLabelKey]
+			leaderName := lws.Name + "-" + groupIndex
+			expectedHostnames := fmt.Sprintf("%[1]s.%[2]s,%[1]s.%[2]s,%[1]s-1.%[2]s,%[1]s-1.%[2]s", leaderName, p.Spec.Subdomain)
+			gomega.Expect(testing.CheckTPUContainerHasCorrectEnvVars(p, expectedHostnames)).To(gomega.Succeed())
+		}
+	})
+
+	ginkgo.It("When changing size, recreates the Pods with correct count and size annotation", func() {
+		replicas := 2
+		size := 2
+		lws := wrappers.BuildLeaderWorkerSet(ns.Name).Replica(replicas).Size(size).Obj()
+		testing.MustCreateLws(ctx, k8sClient, lws)
+
+		testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, int32(replicas))
+		testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+
+		newSize := 3
+		testing.UpdateSize(ctx, k8sClient, lws, int32(newSize))
+		testing.ExpectLeaderWorkerSetAvailable(ctx, k8sClient, lws, "All replicas are ready")
+
+		lwsPods := &corev1.PodList{}
+		testing.ExpectValidPods(ctx, k8sClient, lws, lwsPods)
+
+		for _, p := range lwsPods.Items {
+			gomega.Expect(testing.CheckAnnotation(p, leaderworkerset.SizeAnnotationKey, strconv.Itoa(newSize))).To(gomega.Succeed())
+		}
+		gomega.Expect(len(lwsPods.Items)).To(gomega.Equal(newSize * replicas))
 	})
 
 	ginkgo.It("When changing subdomainPolicy, adds correct env vars", func() {
@@ -256,7 +348,7 @@ var _ = ginkgo.Describe("leaderWorkerSet e2e tests", func() {
 		testing.ExpectValidServices(ctx, k8sClient, lws, 4)
 	})
 
-	ginkgo.It("Doesnt add env vars to containers when not using TPU", func() {
+	ginkgo.It("Doesn't add env vars to containers when not using TPU", func() {
 		leaderPodSpec := wrappers.MakeLeaderPodSpec()
 		workerPodSpec := wrappers.MakeWorkerPodSpec()
 		lws = wrappers.BuildLeaderWorkerSet(ns.Name).Replica(2).Size(2).LeaderTemplateSpec(leaderPodSpec).WorkerTemplateSpec(workerPodSpec).Obj()
@@ -314,6 +406,9 @@ var _ = ginkgo.Describe("leaderWorkerSet e2e tests", func() {
 	serviceAccountName := "lws-controller-manager"
 	metricsServiceName := "lws-controller-manager-metrics-service"
 	namespace := "lws-system"
+	if ns := os.Getenv("LWS_NAMESPACE"); ns != "" {
+		namespace = ns
+	}
 	var controllerPodName string
 
 	ginkgo.It("should ensure the metrics endpoint is serving metrics", func() {
@@ -362,35 +457,35 @@ var _ = ginkgo.Describe("leaderWorkerSet e2e tests", func() {
 		}
 		gomega.Eventually(verifyMetricsServerStarted).Should(gomega.Succeed())
 
-		ginkgo.By("creating the curl-metrics pod to access the metrics endpoint")
-		cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
+		ginkgo.By("creating the curl-metrics job to access the metrics endpoint")
+		cmd = exec.Command("kubectl", "create", "job", "curl-metrics",
 			"--namespace", namespace,
 			"--image=curlimages/curl:7.78.0",
 			"--", "/bin/sh", "-c", fmt.Sprintf(
 				"curl -v -k -H 'Authorization: Bearer %s' https://%s.%s.svc.cluster.local:8443/metrics",
 				token, metricsServiceName, namespace))
 		_, err = testutils.Run(cmd)
-		gomega.Expect(err).NotTo(gomega.HaveOccurred(), "Failed to create curl-metrics pod")
+		gomega.Expect(err).NotTo(gomega.HaveOccurred(), "Failed to create curl-metrics job")
 
 		ginkgo.By("waiting for the curl-metrics pod to complete.")
 		verifyCurlUp := func(g gomega.Gomega) {
-			cmd := exec.Command("kubectl", "get", "pods", "curl-metrics",
-				"-o", "jsonpath={.status.phase}",
+			cmd := exec.Command("kubectl", "get", "job", "curl-metrics",
+				"-o", "jsonpath={.status.succeeded}",
 				"-n", namespace)
 			output, err := testutils.Run(cmd)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
-			g.Expect(output).To(gomega.Equal("Succeeded"), "curl pod in wrong status")
+			g.Expect(output).To(gomega.Equal("1"), "curl pod in wrong status")
 		}
 		gomega.Eventually(verifyCurlUp, 5*time.Minute).Should(gomega.Succeed())
 
 		ginkgo.By("getting the metrics by checking curl-metrics logs")
 		metricsOutput := getMetricsOutput(namespace)
 		gomega.Expect(metricsOutput).To(gomega.ContainSubstring(
-			"controller_runtime_reconcile_total",
+			"controller_runtime_webhook_requests_total",
 		))
 
-		ginkgo.By("cleaning up the curl-metrics pod")
-		cmd = exec.Command("kubectl", "delete", "pod", "-n", namespace, "curl-metrics")
+		ginkgo.By("cleaning up the curl-metrics job")
+		cmd = exec.Command("kubectl", "delete", "job", "curl-metrics", "-n", namespace)
 		_, err = testutils.Run(cmd)
 		gomega.Expect(err).To(gomega.BeNil())
 	})
@@ -420,6 +515,7 @@ func serviceAccountToken(serviceAccountName, namespace string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer os.Remove(tokenRequestFile)
 
 	var out string
 	verifyTokenCreation := func(g gomega.Gomega) {
@@ -448,9 +544,9 @@ func serviceAccountToken(serviceAccountName, namespace string) (string, error) {
 // getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
 func getMetricsOutput(namespace string) string {
 	ginkgo.By("getting the curl-metrics logs")
-	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
+	cmd := exec.Command("kubectl", "logs", "job/curl-metrics", "-n", namespace)
 	metricsOutput, err := testutils.Run(cmd)
-	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "Failed to retrieve logs from curl pod")
-	gomega.Expect(metricsOutput).To(gomega.ContainSubstring("< HTTP/1.1 200 OK"))
+	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "Failed to retrieve logs from curl-metrics job")
+	gomega.Expect(metricsOutput).To(gomega.ContainSubstring("HTTP/1.1 200 OK"))
 	return metricsOutput
 }

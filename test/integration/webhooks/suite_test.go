@@ -44,8 +44,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	disaggregatedset "sigs.k8s.io/lws/api/disaggregatedset/v1"
 	leaderworkerset "sigs.k8s.io/lws/api/leaderworkerset/v1"
 	"sigs.k8s.io/lws/pkg/webhooks"
+	disaggregatedsetwebhook "sigs.k8s.io/lws/pkg/webhooks/disaggregatedset"
 )
 
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
@@ -56,6 +58,7 @@ var k8sClient client.Client
 var testEnv *envtest.Environment
 var ctx context.Context
 var cancel context.CancelFunc
+var pw *webhooks.PodWebhook
 
 func TestAPIs(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -102,6 +105,9 @@ var _ = BeforeSuite(func() {
 	err = leaderworkerset.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
+	err = disaggregatedset.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
 	err = admissionv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
@@ -136,7 +142,11 @@ var _ = BeforeSuite(func() {
 	err = webhooks.SetupLeaderWorkerSetWebhook(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = webhooks.SetupPodWebhook(mgr)
+	err = disaggregatedsetwebhook.SetupDisaggregatedSetWebhook(mgr)
+	Expect(err).NotTo(HaveOccurred())
+
+	pw = webhooks.NewPodWebhook(nil)
+	err = pw.Setup(mgr)
 	Expect(err).NotTo(HaveOccurred())
 	//+kubebuilder:scaffold:webhook
 

@@ -17,9 +17,24 @@ limitations under the License.
 
 package v1
 
+import (
+	leaderworkersetv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
+)
+
 // SubGroupPolicyApplyConfiguration represents a declarative configuration of the SubGroupPolicy type for use
 // with apply.
+//
+// SubGroupPolicy describes the policy that will be applied when creating subgroups.
 type SubGroupPolicyApplyConfiguration struct {
+	// subGroupPolicyType defines what type of Subgroups to create. Defaults to
+	// LeaderWorker
+	Type *leaderworkersetv1.SubGroupPolicyType `json:"subGroupPolicyType,omitempty"`
+	// subGroupSize is the number of pods per subgroup. This value is immutable,
+	// and must not be greater than LeaderWorkerSet.Spec.Size.
+	// Size must be divisible by subGroupSize in which case the
+	// subgroups will be of equal size. Or size - 1 is divisible
+	// by subGroupSize, in which case the leader is considered as
+	// the extra pod, and will be part of the first subgroup.
 	SubGroupSize *int32 `json:"subGroupSize,omitempty"`
 }
 
@@ -27,6 +42,14 @@ type SubGroupPolicyApplyConfiguration struct {
 // apply.
 func SubGroupPolicy() *SubGroupPolicyApplyConfiguration {
 	return &SubGroupPolicyApplyConfiguration{}
+}
+
+// WithType sets the Type field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Type field is set to the value of the last call.
+func (b *SubGroupPolicyApplyConfiguration) WithType(value leaderworkersetv1.SubGroupPolicyType) *SubGroupPolicyApplyConfiguration {
+	b.Type = &value
+	return b
 }
 
 // WithSubGroupSize sets the SubGroupSize field in the declarative configuration to the given value

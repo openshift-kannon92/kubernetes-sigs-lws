@@ -22,37 +22,38 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	leaderworkerset "sigs.k8s.io/lws/api/leaderworkerset/v1"
+	"sigs.k8s.io/lws/pkg/schedulerprovider"
 	"sigs.k8s.io/lws/pkg/utils"
 	acceleratorutils "sigs.k8s.io/lws/pkg/utils/accelerators"
 	podutils "sigs.k8s.io/lws/pkg/utils/pod"
 	statefulsetutils "sigs.k8s.io/lws/pkg/utils/statefulset"
 )
 
-type PodWebhook struct{}
+type PodWebhook struct {
+	SchedulerProvider schedulerprovider.SchedulerProvider
+}
 
-func SetupPodWebhook(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&corev1.Pod{}).
-		WithDefaulter(&PodWebhook{}).
-		WithValidator(&PodWebhook{}).
+func NewPodWebhook(sp schedulerprovider.SchedulerProvider) *PodWebhook {
+	return &PodWebhook{SchedulerProvider: sp}
+}
+
+func (p *PodWebhook) Setup(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr, &corev1.Pod{}).
+		WithDefaulter(p).
+		WithValidator(p).
 		Complete()
 }
 
 //+kubebuilder:webhook:path=/validate--v1-pod,mutating=false,failurePolicy=fail,sideEffects=None,groups="",resources=pods,verbs=create;update,versions=v1,name=vpod.kb.io,sideEffects=None,admissionReviewVersions=v1
 
 // validate admits a pod if a specific annotation exists.
-func (p *PodWebhook) validate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (p *PodWebhook) validate(ctx context.Context, pod *corev1.Pod) (admission.Warnings, error) {
 	log := logf.FromContext(ctx)
-	pod, ok := obj.(*corev1.Pod)
-	if !ok {
-		return nil, fmt.Errorf("expected a Pod but got a %T", obj)
-	}
 
 	log.V(2).Info("Validating Pod")
 
@@ -65,26 +66,22 @@ func (p *PodWebhook) validate(ctx context.Context, obj runtime.Object) (admissio
 	return nil, nil
 }
 
-func (p *PodWebhook) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	return p.validate(ctx, obj)
+func (p *PodWebhook) ValidateCreate(ctx context.Context, pod *corev1.Pod) (admission.Warnings, error) {
+	return p.validate(ctx, pod)
 }
 
-func (p *PodWebhook) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (p *PodWebhook) ValidateUpdate(ctx context.Context, oldObj, newObj *corev1.Pod) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (p *PodWebhook) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (p *PodWebhook) ValidateDelete(ctx context.Context, pod *corev1.Pod) (admission.Warnings, error) {
 	return nil, nil
 }
 
-//+kubebuilder:webhook:path=/mutate--v1-pod,mutating=true,failurePolicy=fail,groups="",resources=pods,verbs=create;update,versions=v1,name=mpod.kb.io,sideEffects=None,admissionReviewVersions=v1
+//+kubebuilder:webhook:path=/mutate--v1-pod,mutating=true,failurePolicy=fail,groups="",resources=pods,verbs=create,versions=v1,name=mpod.kb.io,sideEffects=None,admissionReviewVersions=v1
 
-func (p *PodWebhook) Default(ctx context.Context, obj runtime.Object) error {
+func (p *PodWebhook) Default(ctx context.Context, pod *corev1.Pod) error {
 	log := logf.FromContext(ctx)
-	pod, ok := obj.(*corev1.Pod)
-	if !ok {
-		return fmt.Errorf("expected a Pod but got a %T", obj)
-	}
 
 	log.V(2).Info("Defaulting Pod")
 	// if pod is not part of leaderworkerset, skip
@@ -126,12 +123,12 @@ func (p *PodWebhook) Default(ctx context.Context, obj runtime.Object) error {
 			SetExclusiveAffinities(pod, groupUniqueKey, epKey, leaderworkerset.GroupUniqueHashLabelKey)
 		}
 		_, foundSubGroupSize := pod.Annotations[leaderworkerset.SubGroupSizeAnnotationKey]
-		if foundSubGroupSize && pod.Labels[leaderworkerset.SubGroupIndexLabelKey] == "" {
+		subGroupPolicyType := pod.Annotations[leaderworkerset.SubGroupPolicyTypeAnnotationKey]
+		if foundSubGroupSize && pod.Labels[leaderworkerset.SubGroupIndexLabelKey] == "" && (subGroupPolicyType != string(leaderworkerset.SubGroupPolicyTypeLeaderExcluded)) {
 			// The leader pod always lands on SubGroup 0.
 			pod.Labels[leaderworkerset.SubGroupIndexLabelKey] = "0"
 			subGroupUniqueKey := genGroupUniqueKey(pod.Name, "0")
 			pod.Labels[leaderworkerset.SubGroupUniqueHashLabelKey] = subGroupUniqueKey
-
 			if subEpKey, foundSubEpKey := pod.Annotations[leaderworkerset.SubGroupExclusiveKeyAnnotationKey]; foundSubEpKey {
 				SetExclusiveAffinities(pod, subGroupUniqueKey, subEpKey, leaderworkerset.SubGroupUniqueHashLabelKey)
 			}
@@ -156,6 +153,13 @@ func (p *PodWebhook) Default(ctx context.Context, obj runtime.Object) error {
 			if subEpKey, foundSubEpKey := pod.Annotations[leaderworkerset.SubGroupExclusiveKeyAnnotationKey]; foundSubEpKey {
 				SetExclusiveAffinities(pod, subGroupUniqueKey, subEpKey, leaderworkerset.SubGroupUniqueHashLabelKey)
 			}
+		}
+	}
+
+	if p.SchedulerProvider != nil {
+		err = p.SchedulerProvider.InjectPodGroupMetadata(pod)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -243,7 +247,7 @@ func exclusiveAffinityApplied(pod corev1.Pod, topologyKey string) bool {
 }
 
 func getSubGroupIndex(podCount int, subGroupSize int, workerIndex int) string {
-	if (podCount-1)%subGroupSize == 0 {
+	if (podCount-1)%subGroupSize == 0 && podCount%subGroupSize != 0 {
 		// Leader is considered as extra pod, it is part of the first group
 		return fmt.Sprint((workerIndex - 1) / subGroupSize)
 	}

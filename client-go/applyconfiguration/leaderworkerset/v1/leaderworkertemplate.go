@@ -18,18 +18,46 @@ limitations under the License.
 package v1
 
 import (
-	v1 "k8s.io/api/core/v1"
+	appsv1 "k8s.io/api/apps/v1"
+	apicorev1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/client-go/applyconfigurations/core/v1"
 	leaderworkersetv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 )
 
 // LeaderWorkerTemplateApplyConfiguration represents a declarative configuration of the LeaderWorkerTemplate type for use
 // with apply.
+//
+// Template of the leader/worker pods, the group will include at least one leader pod.
+// Defaults to the worker template if not specified. The idea is to allow users to create a
+// group with identical templates without needing to specify the template in both places.
+// For the leader it represents the id of the group, while for the workers it represents the
+// index within the group. For this reason, users should depend on the labels injected by this
+// API whenever possible.
 type LeaderWorkerTemplateApplyConfiguration struct {
-	LeaderTemplate *v1.PodTemplateSpec                  `json:"leaderTemplate,omitempty"`
-	WorkerTemplate *v1.PodTemplateSpec                  `json:"workerTemplate,omitempty"`
-	Size           *int32                               `json:"size,omitempty"`
-	RestartPolicy  *leaderworkersetv1.RestartPolicyType `json:"restartPolicy,omitempty"`
-	SubGroupPolicy *SubGroupPolicyApplyConfiguration    `json:"subGroupPolicy,omitempty"`
+	// leaderTemplate defines the pod template for leader pods.
+	LeaderTemplate *corev1.PodTemplateSpecApplyConfiguration `json:"leaderTemplate,omitempty"`
+	// workerTemplate defines the pod template for worker pods.
+	WorkerTemplate *corev1.PodTemplateSpecApplyConfiguration `json:"workerTemplate,omitempty"`
+	// size is the number of pods to create. It is the total number of pods in each group.
+	// The minimum is 1 which represent the leader. When set to 1, the leader
+	// pod is created for each group as well as a 0-replica StatefulSet for the workers.
+	// Default to 1.
+	Size *int32 `json:"size,omitempty"`
+	// restartPolicy defines the restart policy when pod failures happen.
+	// The former named Default policy is deprecated, will be removed in the future,
+	// replace with None policy for the same behavior.
+	RestartPolicy *leaderworkersetv1.RestartPolicyType `json:"restartPolicy,omitempty"`
+	// subGroupPolicy describes the policy that will be applied when creating subgroups
+	// in each replica.
+	SubGroupPolicy *SubGroupPolicyApplyConfiguration `json:"subGroupPolicy,omitempty"`
+	// volumeClaimTemplates is a list of claims that pods are allowed to reference.
+	// Every claim in this list must have at least one matching (by name) volumeMount
+	// in one container in the template. A claim in this list takes precedence over
+	// any volumes in the template, with the same name.
+	VolumeClaimTemplates []apicorev1.PersistentVolumeClaim `json:"volumeClaimTemplates,omitempty"`
+	// persistentVolumeClaimRetentionPolicy describes the policy used for PVCs created from
+	// the VolumeClaimTemplates.
+	PersistentVolumeClaimRetentionPolicy *appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy `json:"persistentVolumeClaimRetentionPolicy,omitempty"`
 }
 
 // LeaderWorkerTemplateApplyConfiguration constructs a declarative configuration of the LeaderWorkerTemplate type for use with
@@ -41,16 +69,16 @@ func LeaderWorkerTemplate() *LeaderWorkerTemplateApplyConfiguration {
 // WithLeaderTemplate sets the LeaderTemplate field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the LeaderTemplate field is set to the value of the last call.
-func (b *LeaderWorkerTemplateApplyConfiguration) WithLeaderTemplate(value v1.PodTemplateSpec) *LeaderWorkerTemplateApplyConfiguration {
-	b.LeaderTemplate = &value
+func (b *LeaderWorkerTemplateApplyConfiguration) WithLeaderTemplate(value *corev1.PodTemplateSpecApplyConfiguration) *LeaderWorkerTemplateApplyConfiguration {
+	b.LeaderTemplate = value
 	return b
 }
 
 // WithWorkerTemplate sets the WorkerTemplate field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the WorkerTemplate field is set to the value of the last call.
-func (b *LeaderWorkerTemplateApplyConfiguration) WithWorkerTemplate(value v1.PodTemplateSpec) *LeaderWorkerTemplateApplyConfiguration {
-	b.WorkerTemplate = &value
+func (b *LeaderWorkerTemplateApplyConfiguration) WithWorkerTemplate(value *corev1.PodTemplateSpecApplyConfiguration) *LeaderWorkerTemplateApplyConfiguration {
+	b.WorkerTemplate = value
 	return b
 }
 
@@ -75,5 +103,23 @@ func (b *LeaderWorkerTemplateApplyConfiguration) WithRestartPolicy(value leaderw
 // If called multiple times, the SubGroupPolicy field is set to the value of the last call.
 func (b *LeaderWorkerTemplateApplyConfiguration) WithSubGroupPolicy(value *SubGroupPolicyApplyConfiguration) *LeaderWorkerTemplateApplyConfiguration {
 	b.SubGroupPolicy = value
+	return b
+}
+
+// WithVolumeClaimTemplates adds the given value to the VolumeClaimTemplates field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the VolumeClaimTemplates field.
+func (b *LeaderWorkerTemplateApplyConfiguration) WithVolumeClaimTemplates(values ...apicorev1.PersistentVolumeClaim) *LeaderWorkerTemplateApplyConfiguration {
+	for i := range values {
+		b.VolumeClaimTemplates = append(b.VolumeClaimTemplates, values[i])
+	}
+	return b
+}
+
+// WithPersistentVolumeClaimRetentionPolicy sets the PersistentVolumeClaimRetentionPolicy field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the PersistentVolumeClaimRetentionPolicy field is set to the value of the last call.
+func (b *LeaderWorkerTemplateApplyConfiguration) WithPersistentVolumeClaimRetentionPolicy(value appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy) *LeaderWorkerTemplateApplyConfiguration {
+	b.PersistentVolumeClaimRetentionPolicy = &value
 	return b
 }

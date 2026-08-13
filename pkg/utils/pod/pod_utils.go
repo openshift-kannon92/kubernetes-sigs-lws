@@ -92,28 +92,37 @@ func getPodConditionFromList(conditions []corev1.PodCondition, conditionType cor
 	return -1, nil
 }
 
+func GetEnvVarValueIfInContainer(c *corev1.Container, envVarName string) (bool, string) {
+	for _, env := range c.Env {
+		if envVarName == env.Name {
+			return true, env.Value
+		}
+	}
+	return false, ""
+}
+
 // addEnvVarsIfNotExists adds env vars to the container if they don't already exist.
 // It takes a slice of existing env vars and appends new env vars to the beginning of it,
 // ensuring that the 'firstEnv' and 'e' env vars maintain their order at the front.
 // The function then adds any existing env vars from 'c.Env' that are not in 'e' to the newEnvVars slice.
 func addEnvVarsIfNotExists(c *corev1.Container, firstEnv corev1.EnvVar, e ...corev1.EnvVar) {
-	newEnvVars := make([]corev1.EnvVar, 0)
+	envMap := make(map[string]struct{})
+	newEnvVars := make([]corev1.EnvVar, 0, len(c.Env)+len(e)+1)
 
 	// Add firstEnv to the beginning of the newEnvVars slice
 	newEnvVars = append(newEnvVars, firstEnv)
-	newEnvVars = append(newEnvVars, e...)
+	envMap[firstEnv.Name] = struct{}{}
 
-	// Add existing env vars from c.Env that are not in e to newEnvVars
+	for _, env := range e {
+		newEnvVars = append(newEnvVars, env)
+		envMap[env.Name] = struct{}{}
+	}
+
+	// Add existing env vars from c.Env that are not already added
 	for _, env := range c.Env {
-		exists := false
-		for _, newEnv := range newEnvVars {
-			if newEnv.Name == env.Name {
-				exists = true
-				break
-			}
-		}
-		if !exists {
+		if _, exists := envMap[env.Name]; !exists {
 			newEnvVars = append(newEnvVars, env)
+			envMap[env.Name] = struct{}{}
 		}
 	}
 	c.Env = newEnvVars
@@ -147,13 +156,23 @@ func AddLWSVariables(pod *corev1.Pod) error {
 		Value: size,
 	}
 
+	workerIndex, found := pod.Labels[leaderworkerset.WorkerIndexLabelKey]
+	if !found {
+		return fmt.Errorf("Failure constructing environment variables, no worker index label found for pod %v", klog.KObj(pod))
+	}
+
+	workerIndexEnvVar := corev1.EnvVar{
+		Name:  leaderworkerset.LwsWorkerIndex,
+		Value: workerIndex,
+	}
+
 	// The order of injection needs attention, see
 	// https://github.com/kubernetes-sigs/lws/pull/152
 	for i := range pod.Spec.Containers {
-		addEnvVarsIfNotExists(&pod.Spec.Containers[i], leaderAddressEnvVar, sizeEnvVar)
+		addEnvVarsIfNotExists(&pod.Spec.Containers[i], leaderAddressEnvVar, sizeEnvVar, workerIndexEnvVar)
 	}
 	for i := range pod.Spec.InitContainers {
-		addEnvVarsIfNotExists(&pod.Spec.InitContainers[i], leaderAddressEnvVar, sizeEnvVar)
+		addEnvVarsIfNotExists(&pod.Spec.InitContainers[i], leaderAddressEnvVar, sizeEnvVar, workerIndexEnvVar)
 	}
 
 	return nil

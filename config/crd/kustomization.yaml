@@ -3,6 +3,8 @@
 # It should be run by config/default
 resources:
 - bases/leaderworkerset.x-k8s.io_leaderworkersets.yaml
+- bases/disaggregatedset.x-k8s.io_disaggregatedsets.yaml
+- bases/disaggregatedset.x-k8s.io_disaggregatedsetrolescalers.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:
@@ -16,8 +18,6 @@ patches:
 #- path: patches/cainjection_in_leaderworkersets.yaml
 #+kubebuilder:scaffold:crdkustomizecainjectionpatch
 
-# [WEBHOOK] To enable webhook, uncomment the following section
 # the following config is for teaching kustomize how to do kustomization for CRDs.
-
 configurations:
 - kustomizeconfig.yaml

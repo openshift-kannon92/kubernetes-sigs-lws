@@ -106,42 +106,49 @@ func TestAddLWSVariables(t *testing.T) {
 		pod                      *corev1.Pod
 		expectedLwsLeaderAddress string
 		expectedGroupSize        int
+		expectedWorkerIndex      string
 	}{
 		{
 			name:                     "Leader pod",
-			pod:                      wrappers.MakePodWithLabels("test-sample", "0", "", "default", 3),
+			pod:                      wrappers.MakePodWithLabels("test-sample", "0", "0", "default", 3),
 			expectedLwsLeaderAddress: "test-sample-0.test-sample.default",
 			expectedGroupSize:        3,
+			expectedWorkerIndex:      "0",
 		},
 		{
 			name:                     "Worker pod",
 			pod:                      wrappers.MakePodWithLabels("test-sample", "0", "1", "default", 3),
 			expectedLwsLeaderAddress: "test-sample-0.test-sample.default",
 			expectedGroupSize:        3,
+			expectedWorkerIndex:      "1",
 		},
 		{
 			name:                     "Leader pod, group 1",
-			pod:                      wrappers.MakePodWithLabels("test-sample", "1", "", "default", 2),
+			pod:                      wrappers.MakePodWithLabels("test-sample", "1", "0", "default", 2),
 			expectedLwsLeaderAddress: "test-sample-1.test-sample.default",
 			expectedGroupSize:        2,
+			expectedWorkerIndex:      "0",
 		},
 		{
 			name:                     "Worker pod, group 1",
 			pod:                      wrappers.MakePodWithLabels("test-sample", "1", "3", "default", 2),
 			expectedLwsLeaderAddress: "test-sample-1.test-sample.default",
 			expectedGroupSize:        2,
+			expectedWorkerIndex:      "3",
 		},
 		{
 			name:                     "Leader pod, group 1, non-default namespace",
 			pod:                      wrappers.MakePodWithLabels("test-sample", "1", "3", "lws", 2),
 			expectedLwsLeaderAddress: "test-sample-1.test-sample.lws",
 			expectedGroupSize:        2,
+			expectedWorkerIndex:      "3",
 		},
 		{
 			name:                     "Worker pod, group 1, non-default namespace",
 			pod:                      wrappers.MakePodWithLabels("test-sample", "1", "3", "lws", 2),
 			expectedLwsLeaderAddress: "test-sample-1.test-sample.lws",
 			expectedGroupSize:        2,
+			expectedWorkerIndex:      "3",
 		},
 	}
 
@@ -153,7 +160,7 @@ func TestAddLWSVariables(t *testing.T) {
 			}
 			containers := append(tc.pod.Spec.Containers, tc.pod.Spec.InitContainers...)
 			if len(containers) == 0 {
-				t.Fatalf("No contianers in podSpec %+v", tc.pod.Spec)
+				t.Fatalf("No containers in podSpec %+v", tc.pod.Spec)
 			}
 
 			for _, container := range containers {
@@ -169,6 +176,80 @@ func TestAddLWSVariables(t *testing.T) {
 				if diff := cmp.Diff(envVar.Value, strconv.Itoa(tc.expectedGroupSize)); diff != "" {
 					t.Errorf("Unexpected lws group size %s", diff)
 				}
+				envVar = container.Env[2]
+				if diff := cmp.Diff(envVar.Value, tc.expectedWorkerIndex); diff != "" {
+					t.Errorf("Unexpected lws worker index %s", diff)
+				}
+			}
+		})
+	}
+}
+
+func TestGetEnvVarIfInContainer(t *testing.T) {
+	tests := []struct {
+		name             string
+		container        corev1.Container
+		envVarName       string
+		expectEnvVar     bool
+		expectedEnvValue string
+	}{
+		{
+			name: "Container contains the environment variable, returns correct value",
+			container: corev1.Container{
+				Name: "test",
+				Env: []corev1.EnvVar{
+					{
+						Name:  "PROCESS_PORT",
+						Value: "8776",
+					},
+					{
+						Name:  "PROCESS_ID",
+						Value: "1",
+					},
+				},
+			},
+			envVarName:       "PROCESS_PORT",
+			expectEnvVar:     true,
+			expectedEnvValue: "8776",
+		},
+		{
+			name: "Container does not contain the environment variable, returns empty string",
+			container: corev1.Container{
+				Name: "test",
+				Env: []corev1.EnvVar{
+					{
+						Name:  "PROCESS_ADDRESSES",
+						Value: "lws-default.0",
+					},
+					{
+						Name:  "PROCESS_ID",
+						Value: "1",
+					},
+				},
+			},
+			envVarName:       "PROCESS_PORT",
+			expectEnvVar:     false,
+			expectedEnvValue: "",
+		},
+		{
+			name: "Container does not contain any environment variable, returns empty string",
+			container: corev1.Container{
+				Name: "test",
+			},
+			envVarName:       "PROCESS_PORT",
+			expectEnvVar:     false,
+			expectedEnvValue: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			envVarInContainer, envVarValue := GetEnvVarValueIfInContainer(&tc.container, tc.envVarName)
+			if envVarInContainer != tc.expectEnvVar {
+				t.Errorf("Unexpected env var in container, %s with value %s", tc.envVarName, envVarValue)
+			}
+			if envVarValue != tc.expectedEnvValue {
+				t.Errorf("Unexpected env var value, got: %s, expected: %s", envVarValue, tc.expectedEnvValue)
 			}
 		})
 	}

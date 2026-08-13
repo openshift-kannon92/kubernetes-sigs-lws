@@ -7,17 +7,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - nodes
   verbs:
   - get
@@ -51,6 +40,18 @@ rules:
   verbs:
   - get
   - list
+  - update
+  - watch
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - get
+  - list
+  - patch
   - update
   - watch
 - apiGroups:
@@ -91,6 +92,34 @@ rules:
   verbs:
   - get
   - patch
+  - update
+- apiGroups:
+  - disaggregatedset.x-k8s.io
+  resources:
+  - disaggregatedsetrolescalers
+  - disaggregatedsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - disaggregatedset.x-k8s.io
+  resources:
+  - disaggregatedsetrolescalers/status
+  - disaggregatedsets/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - disaggregatedset.x-k8s.io
+  resources:
+  - disaggregatedsets/finalizers
+  verbs:
   - update
 - apiGroups:
   - leaderworkerset.x-k8s.io

@@ -23,15 +23,56 @@ import (
 
 // RollingUpdateConfigurationApplyConfiguration represents a declarative configuration of the RollingUpdateConfiguration type for use
 // with apply.
+//
+// RollingUpdateConfiguration defines the parameters to be used for RollingUpdateStrategyType.
 type RollingUpdateConfigurationApplyConfiguration struct {
+	// partition indicates the ordinal at which the lws should be partitioned for updates.
+	// During a rolling update, all the groups from ordinal Partition to Replicas-1 will be updated.
+	// The groups from 0 to Partition-1 will not be updated.
+	// This is helpful in incremental rollout strategies like canary deployments
+	// or interactive rollout strategies for multiple replicas like xPyD deployments.
+	// Once partition field and maxSurge field both set, the bursted replicas will keep remaining
+	// until the rolling update is completely done and the partition field is reset to 0.
+	// This is as expected to reduce the reconciling complexity.
+	// The default value is 0.
+	Partition *int32 `json:"partition,omitempty"`
+	// maxUnavailable is the maximum number of replicas that can be unavailable during the update.
+	// Value can be an absolute number (ex: 5) or a percentage of total replicas at the start of update (ex: 10%).
+	// Absolute number is calculated from percentage by rounding down.
+	// This can not be 0 if MaxSurge is 0.
+	// By default, a fixed value of 1 is used.
+	// Example: when this is set to 30%, the old replicas can be scaled down by 30%
+	// immediately when the rolling update starts. Once new replicas are ready, old replicas
+	// can be scaled down further, followed by scaling up the new replicas, ensuring
+	// that at least 70% of original number of replicas are available at all times
+	// during the update.
 	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
-	MaxSurge       *intstr.IntOrString `json:"maxSurge,omitempty"`
+	// maxSurge is the maximum number of replicas that can be scheduled above the original number of
+	// replicas.
+	// Value can be an absolute number (ex: 5) or a percentage of total replicas at
+	// the start of the update (ex: 10%).
+	// Absolute number is calculated from percentage by rounding up.
+	// By default, a value of 0 is used.
+	// Example: when this is set to 30%, the new replicas can be scaled up by 30%
+	// immediately when the rolling update starts. Once old replicas have been deleted,
+	// new replicas can be scaled up further, ensuring that total number of replicas running
+	// at any time during the update is at most 130% of original replicas.
+	// When rolling update completes, replicas will fall back to the original replicas.
+	MaxSurge *intstr.IntOrString `json:"maxSurge,omitempty"`
 }
 
 // RollingUpdateConfigurationApplyConfiguration constructs a declarative configuration of the RollingUpdateConfiguration type for use with
 // apply.
 func RollingUpdateConfiguration() *RollingUpdateConfigurationApplyConfiguration {
 	return &RollingUpdateConfigurationApplyConfiguration{}
+}
+
+// WithPartition sets the Partition field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Partition field is set to the value of the last call.
+func (b *RollingUpdateConfigurationApplyConfiguration) WithPartition(value int32) *RollingUpdateConfigurationApplyConfiguration {
+	b.Partition = &value
+	return b
 }
 
 // WithMaxUnavailable sets the MaxUnavailable field in the declarative configuration to the given value

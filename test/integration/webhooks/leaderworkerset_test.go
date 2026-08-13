@@ -150,6 +150,7 @@ var _ = ginkgo.Describe("leaderworkerset defaulting, creation and update", func(
 				return wrappers.BuildLeaderWorkerSet(ns.Name).RestartPolicy(leaderworkerset.RecreateGroupOnPodRestart).RolloutStrategy(leaderworkerset.RolloutStrategy{
 					Type: leaderworkerset.RollingUpdateStrategyType,
 					RollingUpdateConfiguration: &leaderworkerset.RollingUpdateConfiguration{
+						Partition:      ptr.To[int32](0),
 						MaxUnavailable: intstr.FromInt32(1),
 						MaxSurge:       intstr.FromInt32(0),
 					}})
@@ -161,6 +162,7 @@ var _ = ginkgo.Describe("leaderworkerset defaulting, creation and update", func(
 					RolloutStrategy(leaderworkerset.RolloutStrategy{
 						Type: leaderworkerset.RollingUpdateStrategyType,
 						RollingUpdateConfiguration: &leaderworkerset.RollingUpdateConfiguration{
+							Partition:      ptr.To[int32](2),
 							MaxUnavailable: intstr.FromInt32(2),
 							MaxSurge:       intstr.FromInt32(1),
 						}})
@@ -171,6 +173,7 @@ var _ = ginkgo.Describe("leaderworkerset defaulting, creation and update", func(
 					RolloutStrategy(leaderworkerset.RolloutStrategy{
 						Type: leaderworkerset.RollingUpdateStrategyType,
 						RollingUpdateConfiguration: &leaderworkerset.RollingUpdateConfiguration{
+							Partition:      ptr.To[int32](2),
 							MaxUnavailable: intstr.FromInt32(2),
 							MaxSurge:       intstr.FromInt32(1),
 						}})
@@ -237,6 +240,12 @@ var _ = ginkgo.Describe("leaderworkerset defaulting, creation and update", func(
 			},
 			lwsCreationShouldFail: true,
 		}),
+		ginkgo.Entry("creation with replicas greater than 1000000 should fail", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(ns.Name).Size(2).Replica(1000001)
+			},
+			lwsCreationShouldFail: true,
+		}),
 		ginkgo.Entry("creation with invalid startpolicy should fail", &testValidationCase{
 			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
 				return wrappers.BuildLeaderWorkerSet(ns.Name).StartupPolicy("invalidValue")
@@ -254,6 +263,21 @@ var _ = ginkgo.Describe("leaderworkerset defaulting, creation and update", func(
 				return wrappers.BuildLeaderWorkerSet(ns.Name).Size(2).SubGroupSize(3)
 			},
 			lwsCreationShouldFail: true,
+		}),
+		ginkgo.Entry("creation where (subGroupSize-1) is not divisible by 1 and SubGroupPolicyTypeLeaderExcluded should fail", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(ns.Name).Size(4).SubGroupSize(2).SubGroupType(leaderworkerset.SubGroupPolicyTypeLeaderExcluded)
+			},
+			lwsCreationShouldFail: true,
+		}),
+		ginkgo.Entry("update to size should succeed", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(ns.Name).Size(2)
+			},
+			updateLeaderWorkerSet: func(lws *leaderworkerset.LeaderWorkerSet) {
+				lws.Spec.LeaderWorkerTemplate.Size = ptr.To[int32](3)
+			},
+			updateShouldFail: false,
 		}),
 		ginkgo.Entry("update with invalid replicas should fail (larger than maxInt32)", &testValidationCase{
 			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
@@ -279,15 +303,6 @@ var _ = ginkgo.Describe("leaderworkerset defaulting, creation and update", func(
 			},
 			updateLeaderWorkerSet: func(lws *leaderworkerset.LeaderWorkerSet) {
 				lws.Spec.StartupPolicy = "invalidValue"
-			},
-			updateShouldFail: true,
-		}),
-		ginkgo.Entry("number of size can not be updated", &testValidationCase{
-			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
-				return wrappers.BuildLeaderWorkerSet(ns.Name).Replica(1).Size(1)
-			},
-			updateLeaderWorkerSet: func(lws *leaderworkerset.LeaderWorkerSet) {
-				lws.Spec.LeaderWorkerTemplate.Size = ptr.To[int32](2)
 			},
 			updateShouldFail: true,
 		}),
@@ -327,6 +342,15 @@ var _ = ginkgo.Describe("leaderworkerset defaulting, creation and update", func(
 				lws.Spec.Replicas = ptr.To[int32](3)
 			},
 			updateShouldFail: false,
+		}),
+		ginkgo.Entry("update with invalid replicas should fail (larger than 1000000)", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(ns.Name).Replica(1).Size(1)
+			},
+			updateLeaderWorkerSet: func(lws *leaderworkerset.LeaderWorkerSet) {
+				lws.Spec.Replicas = ptr.To[int32](1000001)
+			},
+			updateShouldFail: true,
 		}),
 		ginkgo.Entry("leader/workerTemplate can be updated", &testValidationCase{
 			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
@@ -453,6 +477,111 @@ var _ = ginkgo.Describe("leaderworkerset defaulting, creation and update", func(
 				return lws
 			},
 			lwsCreationShouldFail: true,
+		}),
+		ginkgo.Entry("set maxUnavailable to 0 and maxSurge to non-zero should succeed", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				lws := wrappers.BuildLeaderWorkerSet(ns.Name)
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxUnavailable = intstr.FromInt32(0)
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxSurge = intstr.FromInt32(1)
+				return lws
+			},
+			lwsCreationShouldFail: false,
+		}),
+		ginkgo.Entry("set replica to 0 no matter maxUnavailable or maxSurge is should be allowed", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				lws := wrappers.BuildLeaderWorkerSet(ns.Name)
+				lws.Spec.Replicas = ptr.To(int32(0))
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxUnavailable = intstr.FromString("25%")
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxSurge = intstr.FromString("25%")
+				return lws
+			},
+			lwsCreationShouldFail: false,
+		}),
+		ginkgo.Entry("set maxSurge to 0 and maxUnavailable to non-zero should be failed", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				lws := wrappers.BuildLeaderWorkerSet(ns.Name)
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxUnavailable = intstr.FromString("25%")
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxSurge = intstr.FromInt32(0)
+				return lws
+			},
+			lwsCreationShouldFail: true,
+		}),
+		ginkgo.Entry("creation with negative partition should fail", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				lws := wrappers.BuildLeaderWorkerSet(ns.Name)
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition = ptr.To[int32](-1)
+				return lws
+			},
+			lwsCreationShouldFail: true,
+		}),
+		ginkgo.Entry("creation with partition greater than replicas should succeed", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				lws := wrappers.BuildLeaderWorkerSet(ns.Name).Replica(3)
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition = ptr.To[int32](5)
+				return lws
+			},
+			lwsCreationShouldFail: false,
+		}),
+		ginkgo.Entry("creation with partition equal to replicas should succeed", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				lws := wrappers.BuildLeaderWorkerSet(ns.Name).Replica(3)
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition = ptr.To[int32](3)
+				return lws
+			},
+			lwsCreationShouldFail: false,
+		}),
+		ginkgo.Entry("creation with partition zero should succeed", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				lws := wrappers.BuildLeaderWorkerSet(ns.Name).Replica(3)
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition = ptr.To[int32](0)
+				return lws
+			},
+			lwsCreationShouldFail: false,
+		}),
+		ginkgo.Entry("update partition should succeed", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(ns.Name).Replica(5)
+			},
+			updateLeaderWorkerSet: func(lws *leaderworkerset.LeaderWorkerSet) {
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition = ptr.To[int32](2)
+			},
+			updateShouldFail: false,
+		}),
+		ginkgo.Entry("update partition to negative should fail", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(ns.Name).Replica(5)
+			},
+			updateLeaderWorkerSet: func(lws *leaderworkerset.LeaderWorkerSet) {
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition = ptr.To[int32](-1)
+			},
+			updateShouldFail: true,
+		}),
+		ginkgo.Entry("update partition to greater than replicas should succeed", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(ns.Name).Replica(5)
+			},
+			updateLeaderWorkerSet: func(lws *leaderworkerset.LeaderWorkerSet) {
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition = ptr.To[int32](10)
+			},
+			updateShouldFail: false,
+		}),
+		ginkgo.Entry("update partition to equal replicas should succeed", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(ns.Name).Replica(5)
+			},
+			updateLeaderWorkerSet: func(lws *leaderworkerset.LeaderWorkerSet) {
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition = ptr.To[int32](5)
+			},
+			updateShouldFail: false,
+		}),
+		ginkgo.Entry("update partition to zero should succeed", &testValidationCase{
+			makeLeaderWorkerSet: func(ns *corev1.Namespace) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(ns.Name).Replica(5)
+			},
+			updateLeaderWorkerSet: func(lws *leaderworkerset.LeaderWorkerSet) {
+				lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition = ptr.To[int32](0)
+			},
+			updateShouldFail: false,
 		}),
 	)
 })

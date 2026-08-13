@@ -25,11 +25,10 @@ import (
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
@@ -39,8 +38,7 @@ type LeaderWorkerSetWebhook struct{}
 
 // SetupLeaderWorkerSetWebhook will setup the manager to manage the webhooks
 func SetupLeaderWorkerSetWebhook(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&v1.LeaderWorkerSet{}).
+	return ctrl.NewWebhookManagedBy(mgr, &v1.LeaderWorkerSet{}).
 		WithDefaulter(&LeaderWorkerSetWebhook{}).
 		WithValidator(&LeaderWorkerSetWebhook{}).
 		Complete()
@@ -48,11 +46,10 @@ func SetupLeaderWorkerSetWebhook(mgr ctrl.Manager) error {
 
 //+kubebuilder:webhook:path=/mutate-leaderworkerset-x-k8s-io-v1-leaderworkerset,mutating=true,failurePolicy=fail,sideEffects=None,groups=leaderworkerset.x-k8s.io,resources=leaderworkersets,verbs=create;update,versions=v1,name=mleaderworkerset.kb.io,admissionReviewVersions=v1
 
-var _ webhook.CustomDefaulter = &LeaderWorkerSetWebhook{}
+var _ admission.Defaulter[*v1.LeaderWorkerSet] = &LeaderWorkerSetWebhook{}
 
-// Default implements webhook.Defaulter so a webhook will be registered for the type
-func (r *LeaderWorkerSetWebhook) Default(ctx context.Context, obj runtime.Object) error {
-	lws := obj.(*v1.LeaderWorkerSet)
+// Default implements admission.Defaulter[*v1.LeaderWorkerSet] so a webhook will be registered for the type
+func (r *LeaderWorkerSetWebhook) Default(ctx context.Context, lws *v1.LeaderWorkerSet) error {
 	if lws.Spec.LeaderWorkerTemplate.RestartPolicy == "" {
 		lws.Spec.LeaderWorkerTemplate.RestartPolicy = v1.RecreateGroupOnPodRestart
 	}
@@ -69,6 +66,7 @@ func (r *LeaderWorkerSetWebhook) Default(ctx context.Context, obj runtime.Object
 		lws.Spec.RolloutStrategy.RollingUpdateConfiguration = &v1.RollingUpdateConfiguration{
 			MaxUnavailable: intstr.FromInt32(1),
 			MaxSurge:       intstr.FromInt32(0),
+			Partition:      ptr.To[int32](0),
 		}
 	}
 
@@ -82,27 +80,25 @@ func (r *LeaderWorkerSetWebhook) Default(ctx context.Context, obj runtime.Object
 		subdomainPolicy := v1.SubdomainShared
 		lws.Spec.NetworkConfig.SubdomainPolicy = &subdomainPolicy
 	}
+
 	return nil
 }
 
 //+kubebuilder:webhook:path=/validate-leaderworkerset-x-k8s-io-v1-leaderworkerset,mutating=false,failurePolicy=fail,sideEffects=None,groups=leaderworkerset.x-k8s.io,resources=leaderworkersets,verbs=create;update,versions=v1,name=vleaderworkerset.kb.io,admissionReviewVersions=v1
 
-var _ webhook.CustomValidator = &LeaderWorkerSetWebhook{}
+var _ admission.Validator[*v1.LeaderWorkerSet] = &LeaderWorkerSetWebhook{}
 
-// ValidateCreate implements webhook.Validator so a webhook will be registered for the type
-func (r *LeaderWorkerSetWebhook) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	allErrs := r.generalValidate(obj)
+// ValidateCreate implements admission.Validator[*v1.LeaderWorkerSet] so a webhook will be registered for the type
+func (r *LeaderWorkerSetWebhook) ValidateCreate(ctx context.Context, lws *v1.LeaderWorkerSet) (admission.Warnings, error) {
+	allErrs := r.generalValidate(lws)
 	return nil, allErrs.ToAggregate()
 }
 
-// ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (r *LeaderWorkerSetWebhook) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	allErrs := r.generalValidate(newObj)
+// ValidateUpdate implements admission.Validator[*v1.LeaderWorkerSet] so a webhook will be registered for the type
+func (r *LeaderWorkerSetWebhook) ValidateUpdate(ctx context.Context, oldLws, newLws *v1.LeaderWorkerSet) (admission.Warnings, error) {
+	allErrs := r.generalValidate(newLws)
 	specPath := field.NewPath("spec")
 
-	oldLws := oldObj.(*v1.LeaderWorkerSet)
-	newLws := newObj.(*v1.LeaderWorkerSet)
-	allErrs = append(allErrs, apivalidation.ValidateImmutableField(*newLws.Spec.LeaderWorkerTemplate.Size, *oldLws.Spec.LeaderWorkerTemplate.Size, field.NewPath("spec", "leaderWorkerTemplate", "size"))...)
 	if newLws.Spec.LeaderWorkerTemplate.SubGroupPolicy != nil && oldLws.Spec.LeaderWorkerTemplate.SubGroupPolicy != nil {
 		allErrs = append(allErrs, apivalidation.ValidateImmutableField(*newLws.Spec.LeaderWorkerTemplate.SubGroupPolicy.SubGroupSize, *oldLws.Spec.LeaderWorkerTemplate.SubGroupPolicy.SubGroupSize, field.NewPath("spec", "leaderWorkerTemplate", "SubGroupPolicy", "subGroupSize"))...)
 	}
@@ -119,13 +115,12 @@ func (r *LeaderWorkerSetWebhook) ValidateUpdate(ctx context.Context, oldObj, new
 	return nil, allErrs.ToAggregate()
 }
 
-// ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (r *LeaderWorkerSetWebhook) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+// ValidateDelete implements admission.Validator[*v1.LeaderWorkerSet] so a webhook will be registered for the type
+func (r *LeaderWorkerSetWebhook) ValidateDelete(ctx context.Context, lws *v1.LeaderWorkerSet) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (r *LeaderWorkerSetWebhook) generalValidate(obj runtime.Object) field.ErrorList {
-	lws := obj.(*v1.LeaderWorkerSet)
+func (r *LeaderWorkerSetWebhook) generalValidate(lws *v1.LeaderWorkerSet) field.ErrorList {
 	specPath := field.NewPath("spec")
 	metadataPath := field.NewPath("metadata")
 
@@ -133,8 +128,13 @@ func (r *LeaderWorkerSetWebhook) generalValidate(obj runtime.Object) field.Error
 	ValidateName := apivalidation.NameIsDNS1035Label
 	allErrs := apivalidation.ValidateObjectMeta(&lws.ObjectMeta, true, apivalidation.ValidateNameFunc(ValidateName), field.NewPath("metadata"))
 	// Ensure replicas and groups number are valid
-	if lws.Spec.Replicas != nil && *lws.Spec.Replicas < 0 {
-		allErrs = append(allErrs, field.Invalid(specPath.Child("replicas"), lws.Spec.Replicas, "replicas must be equal or greater than 0"))
+	if lws.Spec.Replicas != nil {
+		if *lws.Spec.Replicas < 0 {
+			allErrs = append(allErrs, field.Invalid(specPath.Child("replicas"), lws.Spec.Replicas, "replicas must be equal or greater than 0"))
+		}
+		if *lws.Spec.Replicas > 1000000 {
+			allErrs = append(allErrs, field.Invalid(specPath.Child("replicas"), lws.Spec.Replicas, "replicas must be equal or less than 1000000"))
+		}
 	}
 	if *lws.Spec.LeaderWorkerTemplate.Size < 1 {
 		allErrs = append(allErrs, field.Invalid(specPath.Child("leaderWorkerTemplate", "size"), lws.Spec.LeaderWorkerTemplate.Size, "size must be equal or greater than 1"))
@@ -146,26 +146,34 @@ func (r *LeaderWorkerSetWebhook) generalValidate(obj runtime.Object) field.Error
 	maxUnavailable := lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxUnavailable
 	maxUnavailablePath := specPath.Child("rolloutStrategy", "rollingUpdateConfiguration", "maxUnavailable")
 	if lws.Spec.RolloutStrategy.RollingUpdateConfiguration != nil {
-		allErrs = append(allErrs, validatePositiveIntOrPercent(maxUnavailable, maxUnavailablePath)...)
+		allErrs = append(allErrs, ValidatePositiveIntOrPercent(maxUnavailable, maxUnavailablePath)...)
 		// This is aligned with Statefulset.
-		allErrs = append(allErrs, isNotMoreThan100Percent(maxUnavailable, maxUnavailablePath)...)
+		allErrs = append(allErrs, IsNotMoreThan100Percent(maxUnavailable, maxUnavailablePath)...)
 	}
 
 	maxSurge := lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxSurge
 	maxSurgePath := specPath.Child("rolloutStrategy", "rollingUpdateConfiguration", "maxSurge")
 	if lws.Spec.RolloutStrategy.RollingUpdateConfiguration != nil {
-		allErrs = append(allErrs, validatePositiveIntOrPercent(maxSurge, maxSurgePath)...)
-		allErrs = append(allErrs, isNotMoreThan100Percent(maxSurge, maxSurgePath)...)
+		allErrs = append(allErrs, ValidatePositiveIntOrPercent(maxSurge, maxSurgePath)...)
+		allErrs = append(allErrs, IsNotMoreThan100Percent(maxSurge, maxSurgePath)...)
 	}
-	maxUnavailableValue, err := intstr.GetValueFromIntOrPercent(&maxUnavailable, int(*lws.Spec.Replicas), false)
+
+	if lws.Spec.RolloutStrategy.RollingUpdateConfiguration != nil {
+		// Validate partition value
+		partition := lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition
+		partitionPath := specPath.Child("rolloutStrategy", "rollingUpdateConfiguration", "partition")
+		allErrs = append(allErrs, validateNonnegativeField(int64(*partition), partitionPath)...)
+	}
+
+	maxUnavailableValue, err := intstr.GetScaledValueFromIntOrPercent(&maxUnavailable, int(*lws.Spec.Replicas), false)
 	if err != nil {
 		allErrs = append(allErrs, field.Invalid(maxUnavailablePath, maxUnavailable, "invalid value"))
 	}
-	maxSurgeValue, err := intstr.GetValueFromIntOrPercent(&maxSurge, int(*lws.Spec.Replicas), true)
+	maxSurgeValue, err := intstr.GetScaledValueFromIntOrPercent(&maxSurge, int(*lws.Spec.Replicas), true)
 	if err != nil {
 		allErrs = append(allErrs, field.Invalid(maxSurgePath, maxSurge, "invalid value"))
 	}
-	if maxUnavailableValue == 0 && maxSurgeValue == 0 {
+	if maxUnavailableValue == 0 && maxSurgeValue == 0 && *lws.Spec.Replicas != 0 {
 		// Both MaxSurge and MaxUnavailable cannot be zero.
 		allErrs = append(allErrs, field.Invalid(maxUnavailablePath, maxUnavailable, "must not be 0 when `maxSurge` is 0"))
 	}
@@ -184,8 +192,8 @@ func (r *LeaderWorkerSetWebhook) generalValidate(obj runtime.Object) field.Error
 // This is mostly inspired by https://github.com/kubernetes/kubernetes/blob/be4b7176dc131ea842cab6882cd4a06dbfeed12a/pkg/apis/apps/validation/validation.go#L460,
 // but it's not importable.
 
-// validatePositiveIntOrPercent tests if a given value is a valid int or percentage.
-func validatePositiveIntOrPercent(intOrPercent intstr.IntOrString, fldPath *field.Path) field.ErrorList {
+// ValidatePositiveIntOrPercent tests if a given value is a valid int or percentage.
+func ValidatePositiveIntOrPercent(intOrPercent intstr.IntOrString, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	switch intOrPercent.Type {
 	case intstr.String:
@@ -200,9 +208,9 @@ func validatePositiveIntOrPercent(intOrPercent intstr.IntOrString, fldPath *fiel
 	return allErrs
 }
 
-// isNotMoreThan100Percent tests is a value can be represented as a percentage
+// IsNotMoreThan100Percent tests is a value can be represented as a percentage
 // and if this value is not more than 100%.
-func isNotMoreThan100Percent(intOrStringValue intstr.IntOrString, fldPath *field.Path) field.ErrorList {
+func IsNotMoreThan100Percent(intOrStringValue intstr.IntOrString, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	value, isPercent := getPercentValue(intOrStringValue)
 	if !isPercent || value <= 100 {
@@ -226,7 +234,7 @@ func getPercentValue(intOrStringValue intstr.IntOrString) (int, bool) {
 func validateNonnegativeField(value int64, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	if value < 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath, value, "must be grater than or equal to 0"))
+		allErrs = append(allErrs, field.Invalid(fldPath, value, "must be greater than or equal to 0"))
 	}
 	return allErrs
 }
@@ -243,6 +251,11 @@ func validateUpdateSubGroupPolicy(specPath *field.Path, lws *v1.LeaderWorkerSet)
 	}
 	if size < subGroupSize {
 		allErrs = append(allErrs, field.Invalid(specPath.Child("leaderWorkerTemplate", "SubGroupPolicy", "subGroupSize"), lws.Spec.LeaderWorkerTemplate.SubGroupPolicy.SubGroupSize, "subGroupSize cannot be larger than size"))
+	}
+	if lws.Spec.LeaderWorkerTemplate.SubGroupPolicy.Type != nil &&
+		(*lws.Spec.LeaderWorkerTemplate.SubGroupPolicy.Type == v1.SubGroupPolicyTypeLeaderExcluded) &&
+		((size-1)%subGroupSize != 0) {
+		allErrs = append(allErrs, field.Invalid(specPath.Child("leaderWorkerTemplate", "SubGroupPolicy", "subGroupSize"), lws.Spec.LeaderWorkerTemplate.SubGroupPolicy.SubGroupSize, "size-1 must be divisible by subGroupSize when using LeaderExcluded"))
 	}
 	return allErrs
 }
